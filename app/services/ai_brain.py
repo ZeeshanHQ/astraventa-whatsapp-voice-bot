@@ -219,21 +219,18 @@ class GeminiAIService:
 
         # Dynamically determine the model routing list based on context (Voice call vs WhatsApp chat)
         if is_voice:
-            # Voice call: prioritize paid tier for ultra-low latency & reliability, then fallback to free options
             candidate_models = [
                 "google/gemini-2.5-flash",
+                "google/gemini-2.5-flash-lite",
                 "google/gemma-4-31b-it:free",
                 "google/gemma-4-26b-a4b-it:free",
-                "nvidia/nemotron-nano-9b-v2:free",
             ]
         else:
-            # WhatsApp chat: prioritize free models, fallback to paid tier if free limits/quotas fail
-            # NOTE: openrouter/free is excluded - it injects safety labels (e.g. "User Safety: safe") into output
             candidate_models = [
+                "google/gemini-2.5-flash",
+                "google/gemini-2.5-flash-lite",
                 "google/gemma-4-31b-it:free",
                 "google/gemma-4-26b-a4b-it:free",
-                "nvidia/nemotron-nano-9b-v2:free",
-                "google/gemini-2.5-flash",
             ]
 
         url = "https://openrouter.ai/api/v1/chat/completions"
@@ -437,8 +434,9 @@ class GeminiAIService:
             api_key = settings.OPENROUTER_API_KEY or settings.GEMINI_API_KEY
             if api_key:
                 candidate_models = [
-                    "google/gemini-2.5-flash:free",
                     "google/gemini-2.5-flash",
+                    "google/gemini-2.5-flash-lite",
+                    "google/gemma-4-31b-it:free",
                 ]
                 
                 url = "https://openrouter.ai/api/v1/chat/completions"
