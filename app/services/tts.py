@@ -14,7 +14,7 @@ async def text_to_speech_pcmu(text: str, voice: str = DEFAULT_DEEPGRAM_VOICE) ->
     """
     Synthesizes text to speech into raw G.711 PCMU (8kHz, mono mulaw) for Telnyx RTP audio streaming.
     Primary: Deepgram Aura TTS (ultra-low latency ~150-250ms, direct PCMU output, official API).
-    Fallback: edge-tts piped through ffmpeg.
+    Fallback: edge-tts piped through ffmpeg without deadlock.
     """
     if not text or not text.strip():
         return b""
@@ -39,11 +39,21 @@ async def text_to_speech_pcmu(text: str, voice: str = DEFAULT_DEEPGRAM_VOICE) ->
         except Exception as exc:
             logger.warning(f"Deepgram Aura TTS failed: {exc}, attempting fallback...")
 
-    # 2. Fallback: Edge TTS + ffmpeg
+    # 2. Fallback: Edge TTS + ffmpeg (non-blocking buffer safe)
     try:
         import edge_tts
         logger.info(f"Fallback: Synthesizing with edge-tts: '{text[:50]}...'")
         communicate = edge_tts.Communicate(text, DEFAULT_EDGE_VOICE)
+
+        mp3_chunks = []
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                mp3_chunks.append(chunk["data"])
+
+        if not mp3_chunks:
+            return b""
+
+        all_mp3_data = b"".join(mp3_chunks)
 
         process = subprocess.Popen(
             [
@@ -61,18 +71,10 @@ async def text_to_speech_pcmu(text: str, voice: str = DEFAULT_DEEPGRAM_VOICE) ->
             stderr=subprocess.DEVNULL
         )
 
-        mp3_bytes_sent = 0
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                process.stdin.write(chunk["data"])
-                mp3_bytes_sent += len(chunk["data"])
-
-        process.stdin.close()
-        stdout = process.stdout.read()
-        process.wait()
+        stdout, _ = process.communicate(input=all_mp3_data, timeout=8.0)
 
         if stdout:
-            logger.info(f"Edge TTS fallback succeeded: {len(stdout)} bytes PCMU.")
+            logger.info(f"Edge TTS fallback succeeded: {len(stdout)} bytes PCMU generated.")
             return stdout
     except Exception as e:
         logger.error(f"Fallback TTS failed: {e}")
