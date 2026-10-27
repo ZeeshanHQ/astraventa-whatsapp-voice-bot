@@ -43,7 +43,7 @@ async def receive_voice_webhook(request: Request):
         elif event_type == "call.answered":
             logger.info(f"Call {call_control_id} answered. Starting media stream...")
             # Build public WSS stream url, passing metadata in query params for reliability
-            domain = "api.engine.astraventa.com"
+            domain = settings.SERVER_DOMAIN or "api.engine.astraventa.com"
             stream_url = f"wss://{domain}/webhook/voice/stream?from_number={from_number}&call_control_id={call_control_id}"
             await telnyx_client.start_media_stream(call_control_id, stream_url)
 

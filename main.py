@@ -5,7 +5,14 @@ from pydantic import BaseModel
 from typing import List, Optional, Any
 
 from app.config import settings
-from app.routers import webhook_router, ai_test_router, voice_router, sms_router, contacts_router
+from app.routers import (
+    webhook_router,
+    ai_test_router,
+    voice_router,
+    sms_router,
+    contacts_router,
+    studio_router,
+)
 from app.client.whatsapp import whatsapp_client
 
 # Configure Logging
@@ -36,6 +43,7 @@ app.include_router(ai_test_router)
 app.include_router(voice_router)
 app.include_router(sms_router)
 app.include_router(contacts_router)
+app.include_router(studio_router)
 
 
 @app.get("/")

@@ -1,6 +1,6 @@
 import './globals.css';
 import Link from 'next/link';
-import { LayoutDashboard, MessageSquareText, Database, Terminal, Cpu, ArrowUpRight, Inbox } from 'lucide-react';
+import { LayoutDashboard, MessageSquareText, Database, Terminal, Cpu, ArrowUpRight, Inbox, Mic } from 'lucide-react';
 import AuthGuard from '@/components/AuthGuard';
 
 export const metadata = {
@@ -44,6 +44,18 @@ export default function RootLayout({
                       Telemetry & Controls
                     </div>
                     <nav className="space-y-0.5">
+                      <Link
+                        href="/admin/studio"
+                        className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[13px] font-medium text-pink-300 hover:text-white hover:bg-pink-500/10 transition-colors group border border-pink-500/20 bg-pink-500/5 mb-1"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <Mic className="w-3.5 h-3.5 text-pink-400" strokeWidth={1.8} />
+                          <span className="font-semibold text-white">Voice AI Studio</span>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-pink-500/20 text-pink-300 font-mono font-bold">
+                          5s Live
+                        </span>
+                      </Link>
                       <Link
                         href="/admin/overview"
                         className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-[13px] font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition-colors group"

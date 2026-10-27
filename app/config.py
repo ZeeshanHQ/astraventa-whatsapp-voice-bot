@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     DEEPGRAM_API_KEY: str = ""
     FORWARDING_TARGET: str = ""
 
+    # LiveKit & Voice Platform Keys
+    LIVEKIT_URL: str = ""
+    LIVEKIT_API_KEY: str = ""
+    LIVEKIT_API_SECRET: str = ""
+    GROQ_API_KEY: str = ""
+    CARTESIA_API_KEY: str = ""
+    LIVEKIT_SIP_TRUNK_ID: str = ""
+    SERVER_DOMAIN: str = "api.engine.astraventa.com"
+
     @property
     def GRAPH_API_URL(self) -> str:
         return f"https://graph.facebook.com/{self.META_API_VERSION}/{self.WHATSAPP_PHONE_NUMBER_ID}/messages"
