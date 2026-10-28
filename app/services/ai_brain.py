@@ -18,7 +18,7 @@ BASE_SYSTEM_INSTRUCTION = (
     "'solve this math equation', etc.), politely decline to answer, state that you are the Astraventa AI assistant, "
     "and redirect them back to how you can assist them with Astraventa's technology, automation, or web engineering services. "
     "When a client asks to book a meeting, schedule a call, or contact Astraventa, always provide:\n"
-    "• Direct Call: +1 925 504 0101\n"
+    "• Direct Call: +1 (925) 504-0101\n"
     "• Book Consultation (Calendly): https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa\n"
     "Be direct, professional, concise, and structured for WhatsApp/mobile chat. "
     "Maximum response length: 150 words. Never include meta-instructions or word counts in your reply."
@@ -138,7 +138,8 @@ class GeminiAIService:
             )
 
             if not matches:
-                return ""
+                from app.services.db import search_knowledge_base_text
+                matches = await search_knowledge_base_text(prompt, limit=3)
 
             context_snippets = []
             for item in matches:
@@ -200,6 +201,48 @@ class GeminiAIService:
         except Exception as exc:
             logger.warning(f"google-genai SDK generation failed: {exc}")
             return None
+
+    async def _generate_via_groq(
+        self, prompt: str, history: List[Dict[str, str]], system_instruction: str
+    ) -> Optional[str]:
+        """Ultra-low latency generation via Groq Llama-3.3-70B (~120-180ms TTFT)."""
+        api_key = settings.GROQ_API_KEY
+        if not api_key:
+            return None
+
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        messages = [{"role": "system", "content": system_instruction}]
+        for item in history:
+            role = "user" if item["role"] == "user" else "assistant"
+            messages.append({"role": role, "content": item["content"]})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": messages,
+            "temperature": 0.6,
+            "max_tokens": 120,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                res = await client.post(url, json=payload, headers=headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    choices = data.get("choices", [])
+                    if choices and choices[0].get("message"):
+                        reply = choices[0]["message"]["content"]
+                        logger.info(f"Groq Llama-3.3-70B generated voice response: {reply[:60]}...")
+                        return clean_whatsapp_formatting(reply)
+                else:
+                    logger.warning(f"Groq request returned status {res.status_code}")
+        except Exception as exc:
+            logger.warning(f"Groq request failed: {exc}")
+        return None
 
     async def _generate_via_openrouter(
         self, prompt: str, history: List[Dict[str, str]], system_instruction: str, is_voice: bool = False
@@ -281,7 +324,12 @@ class GeminiAIService:
         full_system_instruction = system_instruction + rag_context
 
         try:
-            ai_reply = await self._generate_via_google_genai(prompt, history, full_system_instruction)
+            ai_reply = None
+            if is_voice and settings.GROQ_API_KEY:
+                ai_reply = await self._generate_via_groq(prompt, history, full_system_instruction)
+
+            if not ai_reply:
+                ai_reply = await self._generate_via_google_genai(prompt, history, full_system_instruction)
             if not ai_reply:
                 ai_reply = await self._generate_via_openrouter(prompt, history, full_system_instruction, is_voice=is_voice)
 

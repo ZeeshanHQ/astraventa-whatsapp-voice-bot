@@ -20,6 +20,9 @@ class CreateSessionRequest(BaseModel):
     website_url: Optional[str] = Field(None, example="https://apexsmiles.com")
     custom_rules: Optional[str] = Field(None, example="1. Offer 20% off for new patients.\n2. Closed on Sundays.")
     voice_id: Optional[str] = Field(None, example="79a125e8-cd45-4c13-8a67-188112f4dd22")
+    transfer_phone_number: Optional[str] = Field(None, example="+19255040101")
+    calendar_link: Optional[str] = Field(None, example="https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa")
+    tenant_id: Optional[str] = Field(None, example=None)
 
 
 class OutboundCallRequest(BaseModel):
@@ -29,6 +32,9 @@ class OutboundCallRequest(BaseModel):
     website_url: Optional[str] = None
     custom_rules: Optional[str] = None
     voice_id: Optional[str] = None
+    transfer_phone_number: Optional[str] = None
+    calendar_link: Optional[str] = None
+    tenant_id: Optional[str] = None
 
 
 class ScrapeRequest(BaseModel):
@@ -73,6 +79,9 @@ async def create_demo_session_endpoint(req: CreateSessionRequest):
             website_url=req.website_url,
             custom_rules=req.custom_rules,
             voice_id=req.voice_id,
+            transfer_phone_number=req.transfer_phone_number,
+            calendar_link=req.calendar_link,
+            tenant_id=req.tenant_id,
         )
         return session
     except Exception as exc:
@@ -93,6 +102,9 @@ async def outbound_call_endpoint(req: OutboundCallRequest):
             website_url=req.website_url,
             custom_rules=req.custom_rules,
             voice_id=req.voice_id,
+            transfer_phone_number=req.transfer_phone_number,
+            calendar_link=req.calendar_link,
+            tenant_id=req.tenant_id,
         )
         return res
     except Exception as exc:

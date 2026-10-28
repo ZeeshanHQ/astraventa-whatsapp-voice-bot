@@ -237,14 +237,17 @@ class StudioService:
         custom_rules: Optional[str] = None,
         voice_id: Optional[str] = None,
         caller_phone: Optional[str] = None,
+        transfer_phone_number: Optional[str] = None,
+        calendar_link: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Main Dynamic Dispatch Entrypoint:
         1. Synthesizes tailored system prompt & initial greeting.
         2. Assigns high-fidelity voice.
-        3. Formulates room name & payload metadata.
-        4. Mints in-browser WebRTC token.
-        5. Persists session in Supabase if enabled.
+        3. Persists tenant and agent configuration into Supabase database.
+        4. Formulates room name & dynamic payload metadata.
+        5. Mints in-browser WebRTC token.
         """
         prompt_data = await StudioService.build_dynamic_prompt(
             business_name=business_name,
@@ -263,14 +266,94 @@ class StudioService:
         safe_biz = "".join(c for c in business_name.lower().replace(" ", "-") if c.isalnum() or c == "-")[:16]
         room_name = f"demo-{safe_biz}-{session_id}"
 
+        # Resolve contact settings
+        resolved_transfer_number = (
+            transfer_phone_number
+            or settings.FORWARDING_TARGET
+            or "+19255040101"
+        )
+        resolved_calendar_link = (
+            calendar_link
+            or "https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa"
+        )
+
+        # -------------------------------------------------------------------
+        # Persist Tenant & Agent Configuration to Supabase (Graceful Fallback)
+        # -------------------------------------------------------------------
+        saved_tenant_id = tenant_id
+        try:
+            from app.services.db import get_supabase_client
+            supabase = get_supabase_client()
+            if supabase:
+                # 1. Upsert / Ensure Tenant
+                if not saved_tenant_id:
+                    slug = safe_biz
+                    existing_t = supabase.table("tenants").select("id").eq("slug", slug).limit(1).execute()
+                    if existing_t.data and len(existing_t.data) > 0:
+                        saved_tenant_id = existing_t.data[0]["id"]
+                        supabase.table("tenants").update({
+                            "name": business_name,
+                            "industry": industry,
+                            "website_url": website_url or "",
+                            "phone_number": resolved_transfer_number,
+                            "updated_at": "now()",
+                        }).eq("id", saved_tenant_id).execute()
+                    else:
+                        new_t = supabase.table("tenants").insert({
+                            "name": business_name,
+                            "slug": slug,
+                            "industry": industry,
+                            "website_url": website_url or "",
+                            "phone_number": resolved_transfer_number,
+                        }).execute()
+                        if new_t.data and len(new_t.data) > 0:
+                            saved_tenant_id = new_t.data[0]["id"]
+
+                # 2. Upsert Agent Configuration
+                if saved_tenant_id:
+                    existing_cfg = supabase.table("agent_configs").select("id").eq("tenant_id", saved_tenant_id).limit(1).execute()
+                    cfg_payload = {
+                        "tenant_id": saved_tenant_id,
+                        "name": f"{business_name} AI Voice Agent",
+                        "system_prompt": prompt_data["system_prompt"],
+                        "first_message": prompt_data["greeting"],
+                        "voice_id": selected_voice,
+                        "voice_provider": "cartesia" if not selected_voice.startswith("aura-") else "deepgram",
+                        "llm_model": "llama-3.3-70b-versatile",
+                        "stt_model": "nova-3",
+                        "rules": [custom_rules] if custom_rules else [],
+                        "is_active": True,
+                        "updated_at": "now()",
+                    }
+                    if existing_cfg.data and len(existing_cfg.data) > 0:
+                        cfg_id = existing_cfg.data[0]["id"]
+                        supabase.table("agent_configs").update(cfg_payload).eq("id", cfg_id).execute()
+                    else:
+                        supabase.table("agent_configs").insert(cfg_payload).execute()
+
+                # 3. Log Call Session
+                supabase.table("demo_sessions").insert({
+                    "tenant_id": saved_tenant_id,
+                    "room_name": room_name,
+                    "session_type": "sip_phone" if caller_phone else "webrtc_browser",
+                    "destination_phone": caller_phone or "",
+                    "status": "initiated",
+                }).execute()
+                logger.info(f"Persisted tenant [{business_name}] & agent configuration in Supabase (ID: {saved_tenant_id})")
+        except Exception as db_exc:
+            logger.warning(f"Database persistence fallback: Could not save tenant to Supabase: {db_exc}")
+
         # Metadata payload that the Universal LiveKit Worker will read instantly
         agent_metadata = {
+            "tenant_id": str(saved_tenant_id) if saved_tenant_id else "",
             "business_name": business_name,
             "system_prompt": prompt_data["system_prompt"],
             "first_message": prompt_data["greeting"],
             "voice_id": selected_voice,
             "industry": industry,
             "session_id": session_id,
+            "transfer_phone_number": resolved_transfer_number,
+            "calendar_link": resolved_calendar_link,
         }
 
         # Generate Browser WebRTC Token
@@ -285,12 +368,15 @@ class StudioService:
             "success": True,
             "room_name": room_name,
             "session_id": session_id,
+            "tenant_id": saved_tenant_id,
             "livekit_url": settings.LIVEKIT_URL or "wss://your-livekit-server.com",
             "token": browser_token,
             "metadata": agent_metadata,
             "system_prompt_preview": prompt_data["system_prompt"][:350] + "...",
             "greeting": prompt_data["greeting"],
             "voice_id": selected_voice,
+            "transfer_phone_number": resolved_transfer_number,
+            "calendar_link": resolved_calendar_link,
         }
 
     @staticmethod
@@ -301,6 +387,9 @@ class StudioService:
         website_url: Optional[str] = None,
         custom_rules: Optional[str] = None,
         voice_id: Optional[str] = None,
+        transfer_phone_number: Optional[str] = None,
+        calendar_link: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Dials prospect's real phone line via LiveKit SIP + Telnyx Trunking:
@@ -314,6 +403,9 @@ class StudioService:
             custom_rules=custom_rules,
             voice_id=voice_id,
             caller_phone=to_phone,
+            transfer_phone_number=transfer_phone_number,
+            calendar_link=calendar_link,
+            tenant_id=tenant_id,
         )
 
         room_name = session["room_name"]

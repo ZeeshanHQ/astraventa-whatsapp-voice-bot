@@ -34,78 +34,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "Never use markdown, bullet points, or speak URLs character by character. "
     "Be warm, helpful, and attentive."
 )
-DEFAULT_GREETING = "Hello! Thanks for reaching out to Astraventa. How can I assist you today?"
+DEFAULT_GREETING = "Hello! Thanks for calling Astraventa. How can I assist you with your AI automation or engineering needs today?"
 DEFAULT_CARTESIA_VOICE = "25679595-ec67-4228-97fb-0309993bdc71"  # Warm American Female
-
-
-# ---------------------------------------------------------------------------
-# Real-time Voice Agent Action Tools (Executed during live phone calls)
-# ---------------------------------------------------------------------------
-
-@function_tool
-async def book_appointment(
-    caller_name: str,
-    phone_number: str,
-    requested_date_time: str,
-    service_notes: str = "",
-) -> str:
-    """
-    Book an appointment, consultation, or private showing for the caller.
-    Use this when the customer provides their name, callback phone, and preferred date/time.
-    """
-    logger.info(f"[TOOL] Booking Appointment for {caller_name} ({phone_number}) at {requested_date_time}: {service_notes}")
-    try:
-        supabase = get_supabase_client()
-        if supabase:
-            supabase.table("demo_sessions").insert({
-                "room_name": f"appt-{phone_number}",
-                "destination_phone": phone_number,
-                "status": "booked",
-                "transcript": {
-                    "caller_name": caller_name,
-                    "date_time": requested_date_time,
-                    "notes": service_notes,
-                }
-            }).execute()
-        return f"Successfully booked appointment for {caller_name} on {requested_date_time}. A confirmation will be sent shortly."
-    except Exception as exc:
-        logger.error(f"Error in book_appointment tool: {exc}")
-        return f"Appointment noted for {caller_name} on {requested_date_time}."
-
-
-@function_tool
-async def transfer_to_human(
-    reason: str,
-    department: str = "Senior Specialist",
-) -> str:
-    """
-    Transfers the live caller to a human team member or senior specialist.
-    Use this when the customer explicitly asks to speak to Zeeshan, a human, an attorney, or an emergency line.
-    """
-    logger.info(f"[TOOL] Transferring caller to human specialist. Reason: {reason}")
-    forwarding_target = os.getenv("FORWARDING_TARGET", "+19255040101")
-    return f"Connecting you directly to {department} at {forwarding_target}. Please hold one moment."
-
-
-@function_tool
-async def send_sms_link(
-    phone_number: str,
-    link_purpose: str = "calendar",
-) -> str:
-    """
-    Sends an instant SMS text message to the caller's mobile phone during the call with our booking calendar or website.
-    Use this when the caller asks for a link, pricing sheet, or booking calendar.
-    """
-    logger.info(f"[TOOL] Sending SMS link to {phone_number} for {link_purpose}")
-    try:
-        from_phone = os.getenv("TELNYX_PHONE_NUMBER", "+19255040101")
-        link_url = "https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa"
-        msg = f"Hi from Astraventa! Here is your requested 15-minute consultation link: {link_url}"
-        await telnyx_client.send_sms(from_number=from_phone, to_number=phone_number, text=msg)
-        return "I just texted that link directly to your mobile number."
-    except Exception as exc:
-        logger.warning(f"Failed to send SMS link: {exc}")
-        return "I've queued that link to be texted to your number right away."
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +77,119 @@ async def entrypoint(ctx: JobContext):
     system_prompt = metadata.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
     voice_id = metadata.get("voice_id", DEFAULT_CARTESIA_VOICE)
     first_message = metadata.get("first_message", DEFAULT_GREETING)
+    transfer_target = metadata.get("transfer_phone_number") or os.getenv("FORWARDING_TARGET", "+19255040101")
+    calendar_link = metadata.get("calendar_link") or "https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa"
+    tenant_id = metadata.get("tenant_id", "")
+
+    logger.info(
+        f"Morphing agent for [{business_name}] with Voice [{voice_id}], "
+        f"Transfer [{transfer_target}], Calendar [{calendar_link}]"
+    )
+
+    # -----------------------------------------------------------------------
+    # Dynamic Real-time Action Tools (Tailored to this specific client)
+    # -----------------------------------------------------------------------
+
+    @function_tool
+    async def lookup_knowledge_base(
+        query: str,
+    ) -> str:
+        """
+        Search Astraventa's real-time knowledge base and verified company documents for accurate
+        facts about services, capabilities, pricing packages, case studies, or booking policies.
+        Use this when the caller asks specific questions about Astraventa.
+        """
+        logger.info(f"[{business_name} TOOL] Searching knowledge base for: {query}")
+        try:
+            from app.services.ai_brain import ai_service
+            rag_context = await ai_service._retrieve_rag_context(query)
+            if rag_context:
+                return rag_context.strip()
+            
+            from app.services.db import search_knowledge_base_text
+            text_matches = await search_knowledge_base_text(query, limit=3)
+            if text_matches:
+                return "\n".join([f"- {m.get('content', '')}" for m in text_matches])
+            return "Astraventa is a specialized AI Engineering and Automation agency offering agentic systems and web engineering."
+        except Exception as exc:
+            logger.error(f"Error in lookup_knowledge_base: {exc}")
+            return "Astraventa specializes in custom AI agents and enterprise automation."
+
+    @function_tool
+    async def book_appointment(
+        caller_name: str,
+        phone_number: str,
+        requested_date_time: str,
+        service_notes: str = "",
+    ) -> str:
+        """
+        Book an appointment, consultation, or private showing for the caller.
+        Use this when the customer provides their name, callback phone, and preferred date/time.
+        """
+        logger.info(f"[{business_name} TOOL] Booking Appointment for {caller_name} ({phone_number}) at {requested_date_time}: {service_notes}")
+        try:
+            supabase = get_supabase_client()
+            if supabase:
+                record = {
+                    "room_name": f"appt-{phone_number}",
+                    "destination_phone": phone_number,
+                    "status": "booked",
+                    "transcript": {
+                        "business_name": business_name,
+                        "caller_name": caller_name,
+                        "date_time": requested_date_time,
+                        "notes": service_notes,
+                    }
+                }
+                if tenant_id:
+                    record["tenant_id"] = tenant_id
+                supabase.table("demo_sessions").insert(record).execute()
+            return f"Successfully booked appointment with {business_name} for {caller_name} on {requested_date_time}. A confirmation will be sent shortly."
+        except Exception as exc:
+            logger.error(f"Error in book_appointment tool: {exc}")
+            return f"Appointment noted for {caller_name} on {requested_date_time}."
+
+    @function_tool
+    async def transfer_to_human(
+        reason: str,
+        department: str = "Senior Specialist",
+    ) -> str:
+        """
+        Transfers the live caller to a human team member or senior specialist.
+        Use this when the customer explicitly asks to speak to a person, an attorney, or an emergency line.
+        """
+        logger.info(f"[{business_name} TOOL] Transferring caller to human specialist ({transfer_target}). Reason: {reason}")
+        return f"Connecting you directly to {department} at {transfer_target}. Please hold one moment."
+
+    @function_tool
+    async def send_sms_link(
+        phone_number: str,
+        link_purpose: str = "calendar",
+    ) -> str:
+        """
+        Sends an instant SMS text message to the caller's mobile phone during the call with the booking calendar or website link.
+        Use this when the caller asks for a link, pricing sheet, or booking calendar.
+        """
+        logger.info(f"[{business_name} TOOL] Sending SMS link to {phone_number} for {link_purpose}: {calendar_link}")
+        try:
+            from_phone = os.getenv("TELNYX_PHONE_NUMBER", "+19255040101")
+            msg = f"Hi from {business_name}! Here is your requested link: {calendar_link}"
+            await telnyx_client.send_sms(from_number=from_phone, to_number=phone_number, text=msg)
+            return "I just texted that link directly to your mobile number."
+        except Exception as exc:
+            logger.warning(f"Failed to send SMS link: {exc}")
+            return "I've queued that link to be texted to your number right away."
+
+    # Preload Astraventa Knowledge Base for instant zero-latency responses
+    try:
+        from app.services.db import get_all_knowledge_base
+        docs = await get_all_knowledge_base(limit=8)
+        if docs:
+            kb_summary = "\n".join([f"- {d.get('content', '')}" for d in docs if d.get('content')])
+            system_prompt += f"\n\nVerified Company Knowledge:\n{kb_summary}"
+            logger.info(f"Loaded {len(docs)} knowledge base docs into agent prompt context.")
+    except Exception as e:
+        logger.warning(f"Could not preload knowledge base docs: {e}")
 
     logger.info(f"Morphing agent for [{business_name}] with Voice [{voice_id}]")
 
@@ -203,7 +246,7 @@ async def entrypoint(ctx: JobContext):
         )
 
     # 3. Create Voice Agent with Dynamic Instructions & Tools
-    tools = [book_appointment, transfer_to_human, send_sms_link]
+    tools = [lookup_knowledge_base, book_appointment, transfer_to_human, send_sms_link]
     agent = voice.Agent(
         instructions=system_prompt,
         tools=tools,

@@ -49,7 +49,7 @@ SEED_DOCUMENTS = [
     {
         "content": (
             "Contact & Booking Consultation for Astraventa: "
-            "Book a 15-minute strategy call at https://astraventa.com/book | Email: contact@astraventa.com | Website: https://astraventa.com | Support WhatsApp: +1 (555) 153-2305."
+            "Book a 15-minute strategy call at https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa | Email: contact@astraventa.com | Website: https://astraventa.com | Support WhatsApp: +1 (925) 504-0101."
         ),
         "metadata": {"category": "contact_info"}
     }

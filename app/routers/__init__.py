@@ -4,6 +4,7 @@ from app.routers.voice import router as voice_router
 from app.routers.sms import router as sms_router
 from app.routers.contacts import router as contacts_router
 from app.routers.studio import router as studio_router
+from app.routers.kb import router as kb_router
 
 __all__ = [
     "webhook_router",
@@ -12,4 +13,5 @@ __all__ = [
     "sms_router",
     "contacts_router",
     "studio_router",
+    "kb_router",
 ]

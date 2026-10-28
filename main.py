@@ -12,6 +12,7 @@ from app.routers import (
     sms_router,
     contacts_router,
     studio_router,
+    kb_router,
 )
 from app.client.whatsapp import whatsapp_client
 
@@ -44,6 +45,7 @@ app.include_router(voice_router)
 app.include_router(sms_router)
 app.include_router(contacts_router)
 app.include_router(studio_router)
+app.include_router(kb_router)
 
 
 @app.get("/")

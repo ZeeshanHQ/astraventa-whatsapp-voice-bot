@@ -212,3 +212,92 @@ async def get_all_contacts() -> List[Dict[str, Any]]:
         logger.error(f"Error fetching all contacts: {exc}")
         return []
 
+
+
+async def search_knowledge_base_text(query: str, limit: int = 4) -> List[Dict[str, Any]]:
+    """
+    Fallback keyword/text search against knowledge_base table when vector search
+    is unavailable or returns low scores.
+    """
+    client = get_supabase_client()
+    if not client or not query:
+        return []
+
+    try:
+        keywords = [w.strip() for w in query.lower().split() if len(w.strip()) > 3]
+        if not keywords:
+            keywords = [query.strip()]
+
+        matched_docs = []
+        seen_ids = set()
+
+        for kw in keywords[:3]:
+            res = (
+                client.table("knowledge_base")
+                .select("id, content, metadata")
+                .ilike("content", f"%{kw}%")
+                .limit(limit)
+                .execute()
+            )
+            for row in (res.data or []):
+                if row["id"] not in seen_ids:
+                    seen_ids.add(row["id"])
+                    matched_docs.append(row)
+                if len(matched_docs) >= limit:
+                    break
+            if len(matched_docs) >= limit:
+                break
+
+        if not matched_docs:
+            res = (
+                client.table("knowledge_base")
+                .select("id, content, metadata")
+                .order("id", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            matched_docs = res.data or []
+
+        return matched_docs
+
+    except Exception as exc:
+        logger.error(f"Error in search_knowledge_base_text: {exc}")
+        return []
+
+
+async def get_all_knowledge_base(limit: int = 50) -> List[Dict[str, Any]]:
+    """Fetches all knowledge base documents for dashboard and voice worker preload."""
+    client = get_supabase_client()
+    if not client:
+        return []
+    try:
+        res = (
+            client.table("knowledge_base")
+            .select("id, content, metadata, created_at")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    except Exception as exc:
+        logger.error(f"Error fetching knowledge base: {exc}")
+        return []
+
+
+async def get_recent_call_sessions(limit: int = 20) -> List[Dict[str, Any]]:
+    """Fetches recent demo and live call sessions for dashboard activity."""
+    client = get_supabase_client()
+    if not client:
+        return []
+    try:
+        res = (
+            client.table("demo_sessions")
+            .select("id, room_name, session_type, destination_phone, status, duration_seconds, transcript, created_at")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    except Exception as exc:
+        logger.error(f"Error fetching demo sessions: {exc}")
+        return []
