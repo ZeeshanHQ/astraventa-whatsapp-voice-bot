@@ -301,3 +301,69 @@ async def get_recent_call_sessions(limit: int = 20) -> List[Dict[str, Any]]:
     except Exception as exc:
         logger.error(f"Error fetching demo sessions: {exc}")
         return []
+
+
+async def create_call_session(call_control_id: str, from_number: str, session_type: str = "inbound_phone") -> Optional[str]:
+    """Creates a new tracked call session row in demo_sessions."""
+    client = get_supabase_client()
+    if not client:
+        return None
+    try:
+        short_id = from_number[-4:] if len(from_number) >= 4 else "0101"
+        data = {
+            "room_name": f"Call-{short_id}",
+            "session_type": session_type,
+            "destination_phone": from_number,
+            "status": "in_progress",
+            "duration_seconds": 0,
+            "transcript": [],
+        }
+        res = client.table("demo_sessions").insert(data).execute()
+        if res.data and len(res.data) > 0:
+            session_id = str(res.data[0].get("id"))
+            logger.info(f"Created tracked call session {session_id} for {from_number}")
+            return session_id
+    except Exception as exc:
+        logger.error(f"Error creating call session for {from_number}: {exc}")
+    return None
+
+
+async def append_call_transcript(session_id: str, speaker: str, text: str, timestamp_str: str) -> None:
+    """Appends a new turn to the session transcript in demo_sessions."""
+    client = get_supabase_client()
+    if not client or not session_id or not text:
+        return
+    try:
+        res = client.table("demo_sessions").select("transcript").eq("id", session_id).execute()
+        current_transcript = []
+        if res.data and len(res.data) > 0:
+            current_transcript = res.data[0].get("transcript") or []
+            if not isinstance(current_transcript, list):
+                current_transcript = []
+
+        current_transcript.append({
+            "speaker": speaker,
+            "text": text,
+            "time": timestamp_str,
+        })
+
+        client.table("demo_sessions").update({
+            "transcript": current_transcript
+        }).eq("id", session_id).execute()
+    except Exception as exc:
+        logger.error(f"Error appending transcript to session {session_id}: {exc}")
+
+
+async def end_call_session(session_id: str, duration_seconds: int, status: str = "completed") -> None:
+    """Updates session with final duration and completion status."""
+    client = get_supabase_client()
+    if not client or not session_id:
+        return
+    try:
+        client.table("demo_sessions").update({
+            "status": status,
+            "duration_seconds": duration_seconds,
+        }).eq("id", session_id).execute()
+        logger.info(f"Closed call session {session_id}: status={status}, duration={duration_seconds}s")
+    except Exception as exc:
+        logger.error(f"Error closing call session {session_id}: {exc}")

@@ -25,16 +25,16 @@ BASE_SYSTEM_INSTRUCTION = (
 )
 
 VOICE_SYSTEM_INSTRUCTION = (
-    "You are the friendly, professional, and natural AI phone receptionist for Astraventa, a technology agency specializing in "
-    "agentic workflows, custom AI backends, automation, web engineering, UI/UX, and enterprise systems. "
-    "You are talking to a client over a live phone call. "
-    "Strict rules for voice responses:\n"
-    "1. Speak naturally, conversationally, and keep replies to ONE short sentence only — never more than 20 words. "
-    "2. Never use bullet points, asterisks, list markers, or markdown formatting.\n"
-    "3. Never speak raw URL links. Instead say 'you can check our website at astraventa.com' or 'you can book a slot on our calendly link'.\n"
-    "4. If the caller explicitly requests to talk to Zeeshan, speak to a human, or transfer the call, naturally guide them by saying: 'Sure, let me transfer you to Zeeshan.' Do NOT say you will transfer them if they are just introducing themselves (e.g., 'My name is Zeeshan', 'This is Zeeshan') or mentioning the name in passing without asking to be connected to them.\n"
-    "5. STRICT RULE ON OFF-TOPIC QUESTIONS: If the client asks general knowledge, trivia, math, science, or off-topic questions, politely decline and state you can only help with Astraventa's services or transferring the call.\n"
-    "6. Keep the style warm, simple, and helpful. Do not speak a wall of text; let the user respond."
+    "You are Sarah, the warm, sharp, real-sounding human phone receptionist for Astraventa. "
+    "You are in a live phone conversation with a caller right now. "
+    "Strict Conversational Guidelines:\n"
+    "1. Sound completely human, warm, and natural: start turns with natural spoken words like 'Yeah, absolutely!', 'Got it!', 'For sure!', 'Hey there!', or 'Sure thing!'.\n"
+    "2. STRICT BREVITY: Keep your answer to 10 to 18 words max! Speak like a quick human on the phone, never like a written AI essay.\n"
+    "3. NEVER recite lists or marketing bullet points. Answer their immediate thought, and toss a short conversational question back.\n"
+    "4. Key Facts: Astraventa builds custom Voice AI Agents, WhatsApp bots, and Next.js web applications. Starter package is $499/mo, Enterprise is $1,499/mo.\n"
+    "5. If the caller asks to speak to Zeeshan, a human, or transfer: say 'Sure thing, hold on just a moment while I transfer you over to Zeeshan.'\n"
+    "6. If the caller asks about pricing or offers: say 'For sure! We have a Starter plan at $499, and an Enterprise package at $1,499. Would you like a quick walkthrough?'\n"
+    "7. Never say markdown, asterisks, bullet points, or raw URLs. Always be ultra-conversational and authentic."
 )
 
 
@@ -125,21 +125,10 @@ class GeminiAIService:
         return None
 
     async def _retrieve_rag_context(self, prompt: str) -> str:
-        """Retrieves relevant company knowledge from Supabase vector search."""
+        """Retrieves relevant company knowledge from Supabase fast text search (0ms embedding latency)."""
         try:
-            embedding = await self.generate_embedding(prompt)
-            if not embedding:
-                return ""
-
-            matches = await search_knowledge_base(
-                query_embedding=embedding,
-                match_threshold=0.1,
-                match_count=4,
-            )
-
-            if not matches:
-                from app.services.db import search_knowledge_base_text
-                matches = await search_knowledge_base_text(prompt, limit=3)
+            from app.services.db import search_knowledge_base_text
+            matches = await search_knowledge_base_text(prompt, limit=3)
 
             context_snippets = []
             for item in matches:
@@ -287,11 +276,13 @@ class GeminiAIService:
         async with httpx.AsyncClient(timeout=20.0) as client:
             for model_name in candidate_models:
                 try:
+                    max_tok = 60 if is_voice else 1000
+                    temp = 0.5 if is_voice else 0.7
                     payload = {
                         "model": model_name,
                         "messages": messages,
-                        "temperature": 0.7,
-                        "max_tokens": 1000,
+                        "temperature": temp,
+                        "max_tokens": max_tok,
                     }
                     response = await client.post(url, json=payload, headers=headers)
                     res_json = response.json()
@@ -333,8 +324,10 @@ class GeminiAIService:
             if not ai_reply:
                 ai_reply = await self._generate_via_openrouter(prompt, history, full_system_instruction, is_voice=is_voice)
 
-            await memory_manager.add_user_message(wa_id, prompt)
-            await memory_manager.add_ai_message(wa_id, ai_reply)
+            # Background persistence so audio stream begins with 0ms delay
+            import asyncio
+            asyncio.create_task(memory_manager.add_user_message(wa_id, prompt))
+            asyncio.create_task(memory_manager.add_ai_message(wa_id, ai_reply))
 
             return ai_reply
 

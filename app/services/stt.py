@@ -19,7 +19,7 @@ class DeepgramLiveClient:
         # endpointing=500 detects pauses in speech (500ms) to trigger speech_final, allowing user breathing room
         # model=nova-2 provides state-of-the-art transcription accuracy for phone calls
         # smart_format=true formats numbers, capitalization, and names like Zeeshan correctly
-        self.url = "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000&channels=1&interim_results=true&endpointing=500&model=nova-2&smart_format=true"
+        self.url = "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000&channels=1&interim_results=true&endpointing=300&utterance_end_ms=1000&model=nova-2&smart_format=true"
         self.on_transcript = on_transcript_received
         self.websocket = None
         self.receive_task = None

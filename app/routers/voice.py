@@ -2,23 +2,35 @@ import json
 import base64
 import asyncio
 import logging
+import time
+from datetime import datetime
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from app.config import settings
 from app.client.telnyx import telnyx_client
 from app.services.stt import DeepgramLiveClient
 from app.services.tts import text_to_speech_pcmu
 from app.services.ai_brain import ai_service
+from app.services.db import (
+    create_call_session,
+    append_call_transcript,
+    end_call_session,
+)
 
 logger = logging.getLogger("voice_router")
 router = APIRouter(tags=["Voice Webhook"])
+
+# Active sessions map: call_control_id -> session_id
+active_sessions = {}
+
 
 @router.post("/webhook/voice")
 async def receive_voice_webhook(request: Request):
     """
     Handles Telnyx Call Control Webhook events.
     Routes:
-      - call.initiated -> Answer the call
+      - call.initiated -> Answer the call & track session
       - call.answered -> Start bidirectional media streaming
+      - call.hangup -> Record completion in database
     """
     try:
         payload = await request.json()
@@ -42,7 +54,6 @@ async def receive_voice_webhook(request: Request):
 
         elif event_type == "call.answered":
             logger.info(f"Call {call_control_id} answered. Starting media stream...")
-            # Build public WSS stream url, passing metadata in query params for reliability
             domain = settings.SERVER_DOMAIN or "api.engine.astraventa.com"
             stream_url = f"wss://{domain}/webhook/voice/stream?from_number={from_number}&call_control_id={call_control_id}"
             await telnyx_client.start_media_stream(call_control_id, stream_url)
@@ -62,13 +73,17 @@ async def receive_voice_webhook(request: Request):
 async def voice_websocket_stream(websocket: WebSocket):
     """
     WebSocket endpoint handling raw bi-directional audio stream (PCMU over WebSocket)
-    connecting Telnyx Call Control with Deepgram Live STT, Gemini RAG, and edge-tts.
+    connecting Telnyx Call Control with Deepgram Live STT, Ultra-Fast Humanized LLM, and Deepgram Aura TTS.
+    Features:
+      - Instant Caller Barge-In with Telnyx Media Buffer Clearing
+      - Snappy 300ms turn-taking
+      - Real-time Inbound Call Session & Transcript Logging into Supabase `demo_sessions`
     """
     await websocket.accept()
     logger.info("Telnyx media WebSocket connection accepted.")
 
     # Extract call metadata passed from query parameters
-    from_number = websocket.query_params.get("from_number", "anonymous_call")
+    from_number = websocket.query_params.get("from_number", "anonymous_call").strip()
     call_control_id = websocket.query_params.get("call_control_id")
 
     logger.info(f"Stream parameters: from_number={from_number}, call_control_id={call_control_id}")
@@ -76,136 +91,130 @@ async def voice_websocket_stream(websocket: WebSocket):
     deepgram_client = None
     stream_id = None
     playback_task = None
+    call_start_time = time.time()
+    session_id = None
+    is_speaking = False
 
-    # Helper to send synthesized PCMU audio back in real-time chunks (prevents silence/buffer errors)
+    # Create tracked session in Supabase demo_sessions
+    try:
+        session_id = await create_call_session(
+            call_control_id=call_control_id or "unknown",
+            from_number=from_number,
+            session_type="inbound_phone"
+        )
+    except Exception as e:
+        logger.error(f"Error initializing call session: {e}")
+
+    # Helper to send synthesized PCMU audio back in real-time chunks
     async def send_audio_in_chunks(audio_bytes: bytes):
-        nonlocal stream_id
+        nonlocal stream_id, is_speaking
+        is_speaking = True
         chunk_size = 160  # 20ms of PCMU at 8kHz (8000 bytes/sec * 0.020 = 160 bytes)
         start_time = asyncio.get_event_loop().time()
         logger.info(f"Streaming {len(audio_bytes)} bytes of audio in {chunk_size}-byte chunks (stream_id: {stream_id})...")
-        for i in range(0, len(audio_bytes), chunk_size):
-            chunk = audio_bytes[i:i + chunk_size]
-            base64_chunk = base64.b64encode(chunk).decode("utf-8")
-            
-            payload = {
-                "event": "media",
-                "media": {
-                    "payload": base64_chunk
-                }
-            }
-            if stream_id:
-                payload["stream_id"] = stream_id
 
-            await websocket.send_json(payload)
-            
-            # Drift-corrected sleep to maintain precise 20ms playback pacing
-            next_chunk_index = i + chunk_size
-            expected_time = start_time + (next_chunk_index / 8000.0)
-            now = asyncio.get_event_loop().time()
-            sleep_duration = expected_time - now
-            if sleep_duration > 0:
-                await asyncio.sleep(sleep_duration)
+        try:
+            for i in range(0, len(audio_bytes), chunk_size):
+                chunk = audio_bytes[i:i + chunk_size]
+                base64_chunk = base64.b64encode(chunk).decode("utf-8")
+
+                payload = {
+                    "event": "media",
+                    "media": {
+                        "payload": base64_chunk
+                    }
+                }
+                if stream_id:
+                    payload["stream_id"] = stream_id
+
+                await websocket.send_json(payload)
+
+                # Drift-corrected sleep to maintain precise 20ms playback pacing
+                next_chunk_index = i + chunk_size
+                expected_time = start_time + (next_chunk_index / 8000.0)
+                now = asyncio.get_event_loop().time()
+                sleep_duration = expected_time - now
+                if sleep_duration > 0:
+                    await asyncio.sleep(sleep_duration)
+
+        except asyncio.CancelledError:
+            logger.info("Playback cancelled by caller interruption / barge-in. Sending clear packet...")
+            if stream_id:
+                try:
+                    await websocket.send_json({"event": "clear", "stream_id": stream_id})
+                except Exception:
+                    pass
+            raise
+        finally:
+            is_speaking = False
 
     # Callback when Deepgram yields transcript segment
     async def on_transcript(transcript: str, is_final: bool):
-        nonlocal playback_task
+        nonlocal playback_task, session_id, stream_id, is_speaking
 
-        # Cancel active playback only if user is clearly speaking (at least 3 words in interim)
-        # This prevents background noise, breathing, or call connection artifacts from killing the greeting
-        word_count = len(transcript.strip().split()) if transcript.strip() else 0
-        if playback_task and not playback_task.done() and word_count >= 3:
-            playback_task.cancel()
-            logger.info(f"Cancelled active playback task due to user barge-in ({word_count} words detected).")
-            try:
-                await playback_task
-            except asyncio.CancelledError:
-                pass
+        clean_text = transcript.strip()
+        if not clean_text:
+            return
 
-        # Only process query and respond if the segment is finalized
+        # 1. INSTANT BARGE-IN: If bot is speaking and caller utters ANY word, stop bot immediately!
+        if (is_speaking or (playback_task and not playback_task.done())):
+            logger.info(f"Instant Barge-in triggered by caller speaking: '{clean_text}'. Stopping speech...")
+            if playback_task and not playback_task.done():
+                playback_task.cancel()
+            is_speaking = False
+
+            if stream_id:
+                try:
+                    await websocket.send_json({"event": "clear", "stream_id": stream_id})
+                    logger.info("Sent Telnyx clear buffer event.")
+                except Exception as e:
+                    logger.warning(f"Error sending clear packet: {e}")
+
+        # 2. Only process full reply once caller finishes utterance (endpointing=300ms)
         if not is_final:
             return
 
-        logger.info(f"User Spoke (Final): '{transcript}'")
+        logger.info(f"User Spoke (Final): '{clean_text}'")
+        now_time = datetime.utcnow().strftime("%H:%M:%S")
 
-        # Intent detection keywords for user transcript
-        user_lower = transcript.lower()
+        # Track caller utterance in session transcript
+        if session_id:
+            asyncio.create_task(append_call_transcript(session_id, "caller", clean_text, now_time))
+
+        # Intent detection keywords for transfer
+        user_lower = clean_text.lower()
         transfer_intent_phrases = [
-            "talk to zeeshan",
-            "speak to zeeshan",
-            "speak with zeeshan",
-            "connect me to zeeshan",
-            "connect me with zeeshan",
-            "transfer me to zeeshan",
-            "put me through to zeeshan",
-            "i want zeeshan",
-            "get me zeeshan",
-            "talk to human",
-            "speak to human",
-            "talk with human",
-            "speak with human",
-            "talk to a human",
-            "speak to a human",
-            "talk with a human",
-            "speak with a human",
-            "talk with any person",
-            "talk to any person",
-            "speak with any person",
-            "speak to any person",
-            "talk to a person",
-            "talk with a person",
-            "speak to a person",
-            "speak with a person",
-            "connect me to a person",
-            "connect me with a person",
-            "connect me to human",
-            "connect me with human",
-            "talk to someone",
-            "talk to somebody",
-            "speak to someone",
-            "speak to somebody",
-            "transfer me",
-            "forward my call",
-            "call transfer",
-            "representative",
-            "operator",
-            "agent",
+            "talk to zeeshan", "speak to zeeshan", "speak with zeeshan",
+            "connect me to zeeshan", "connect me with zeeshan", "transfer me to zeeshan",
+            "put me through to zeeshan", "i want zeeshan", "get me zeeshan",
+            "talk to human", "speak to human", "talk with human", "speak with human",
+            "talk to a human", "speak to a human", "talk with a human", "speak with a human",
+            "talk to a person", "speak to a person", "connect me to a person",
+            "transfer me", "forward my call", "representative", "operator"
         ]
         user_transfer_intent = any(phrase in user_lower for phrase in transfer_intent_phrases)
 
-        # Process the transcript through Gemini RAG (shares user history by from_number)
-        reply_text = await ai_service.process_user_query(wa_id=from_number, prompt=transcript, is_voice=True)
+        # Generate response via AI Service (Humanized, ultra-low latency)
+        reply_text = await ai_service.process_user_query(wa_id=from_number, prompt=clean_text, is_voice=True)
         logger.info(f"AI Response: '{reply_text}'")
 
-        # Intent detection in AI response (handles STT errors like "Vishan"/"Nishan")
+        # Track AI reply in session transcript
+        if session_id:
+            asyncio.create_task(append_call_transcript(session_id, "agent", reply_text, datetime.utcnow().strftime("%H:%M:%S")))
+
         ai_lower = reply_text.lower()
         ai_transfer_indicators = [
-            "transfer you to zeeshan",
-            "transferring you to zeeshan",
-            "connect you with zeeshan",
-            "connecting you with zeeshan",
-            "connect you to zeeshan",
-            "connecting you to zeeshan",
-            "put you through to zeeshan",
-            "putting you through to zeeshan",
-            "transfer you now",
-            "transferring you now",
-            "connecting you now",
-            "transfer you",
-            "transferring you",
-            "connect you",
-            "connecting you",
-            "put you through",
-            "putting you through"
+            "transfer you to zeeshan", "transferring you to zeeshan",
+            "connect you with zeeshan", "connecting you with zeeshan",
+            "transfer you now", "connecting you now", "transfer you", "transferring you"
         ]
         ai_transfer_intent = any(phrase in ai_lower for phrase in ai_transfer_indicators)
-
         should_transfer = user_transfer_intent or ai_transfer_intent
 
         if should_transfer:
-            logger.info(f"Transfer intent detected (User intent: {user_transfer_intent}, AI intent: {ai_transfer_intent})")
-            # If the AI response itself doesn't mention transfer, inject a default notice
+            logger.info("Transfer intent confirmed. Notifying caller and transferring call...")
             if not ai_transfer_intent:
-                reply_text = "Sure, please hold while I put you through to Zeeshan."
+                reply_text = "Sure thing, hold on just a second while I connect you right over to Zeeshan."
 
             audio_bytes = await text_to_speech_pcmu(reply_text)
             if audio_bytes:
@@ -213,15 +222,16 @@ async def voice_websocket_stream(websocket: WebSocket):
                 try:
                     await playback_task
                 except asyncio.CancelledError:
-                    logger.info("Playback of transfer notice was cancelled.")
-                    return
+                    pass
 
-            # Issue transfer command to Telnyx
             if call_control_id:
                 await telnyx_client.transfer_call(call_control_id, settings.FORWARDING_TARGET)
+                if session_id:
+                    duration_sec = int(time.time() - call_start_time)
+                    asyncio.create_task(end_call_session(session_id, duration_sec, status="transferred"))
             return
 
-        # Regular reply: Synthesize to PCMU G.711 mulaw using edge-tts
+        # Regular natural response: Synthesize to PCMU G.711 via Deepgram Aura
         audio_bytes = await text_to_speech_pcmu(reply_text)
         if audio_bytes:
             playback_task = asyncio.create_task(send_audio_in_chunks(audio_bytes))
@@ -246,7 +256,6 @@ async def voice_websocket_stream(websocket: WebSocket):
             data = json.loads(message)
             event_type = data.get("event")
 
-            # Capture stream_id dynamically if available in any event
             if "stream_id" in data:
                 stream_id = data.get("stream_id")
 
@@ -254,17 +263,17 @@ async def voice_websocket_stream(websocket: WebSocket):
                 media_data = data.get("media", {})
                 payload = media_data.get("payload")
                 if payload:
-                    # Decode base64 raw audio bytes
                     audio_bytes = base64.b64decode(payload)
-                    # Stream to Deepgram
                     await deepgram_client.send_audio(audio_bytes)
 
             elif event_type == "start":
                 logger.info(f"Start streaming payload: {data}")
-                # Play greeting immediately upon call start in a non-blocking background task
                 async def play_greeting():
-                    nonlocal playback_task
-                    greeting_text = "Hello! Thanks for calling Astraventa. How can I help you today?"
+                    nonlocal playback_task, session_id
+                    greeting_text = "Hey there! Thanks for calling Astraventa. How can I help you out today?"
+                    if session_id:
+                        asyncio.create_task(append_call_transcript(session_id, "agent", greeting_text, datetime.utcnow().strftime("%H:%M:%S")))
+
                     audio_bytes = await text_to_speech_pcmu(greeting_text)
                     if audio_bytes:
                         playback_task = asyncio.create_task(send_audio_in_chunks(audio_bytes))
@@ -273,7 +282,7 @@ async def voice_websocket_stream(websocket: WebSocket):
                             logger.info("Finished streaming welcome greeting.")
                         except asyncio.CancelledError:
                             logger.info("Welcome greeting playback was cancelled.")
-                
+
                 asyncio.create_task(play_greeting())
             else:
                 logger.info(f"Received other Telnyx event: {data}")
@@ -283,9 +292,16 @@ async def voice_websocket_stream(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Error in Telnyx media streaming WebSocket: {e}", exc_info=True)
     finally:
+        # Wrap up call session
+        duration_sec = int(time.time() - call_start_time)
+        if session_id:
+            try:
+                await end_call_session(session_id, duration_sec, status="completed")
+            except Exception as e:
+                logger.error(f"Error ending call session: {e}")
+
         if playback_task and not playback_task.done():
             playback_task.cancel()
-            logger.info("Cancelled active playback task during WebSocket cleanup.")
         if deepgram_client:
             await deepgram_client.close()
-        logger.info("Voice streaming connection fully closed.")
+        logger.info(f"Voice streaming session {session_id} closed (Total duration: {duration_sec}s).")
