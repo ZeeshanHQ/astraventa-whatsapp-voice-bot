@@ -61,17 +61,30 @@ export default function OverviewPage() {
           .map((row) => row.wa_id)
       );
 
-      // Fetch knowledge base count
-      const { count: kbCount } = await supabase
-        .from('knowledge_base')
-        .select('id', { count: 'exact', head: true });
+      // Fetch knowledge base count via backend API
+      let docCount = 6;
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
+        const kbRes = await fetch(`${apiUrl}/api/kb`);
+        if (kbRes.ok) {
+          const kbData = await kbRes.json();
+          if (typeof kbData.total === 'number') {
+            docCount = kbData.total;
+          }
+        }
+      } catch (e) {
+        const { count: kbCount } = await supabase
+          .from('knowledge_base')
+          .select('id', { count: 'exact', head: true });
+        if (kbCount) docCount = kbCount;
+      }
 
       setStats({
         totalMessages: totalMsgs || 501,
         totalConversations: totalConvs || 14,
         activeUsersToday: todayWaIds.size || 6,
         systemUptime: '99.98%',
-        totalDocs: kbCount || 6,
+        totalDocs: docCount,
       });
 
       if (data && data.length > 0) {

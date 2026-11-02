@@ -66,12 +66,27 @@ export default function KnowledgeBasePage() {
   const fetchDocs = async () => {
     setLoading(true);
     try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
+      try {
+        const res = await fetch(`${apiUrl}/api/kb`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.documents && json.documents.length > 0) {
+            setDocs(json.documents as KnowledgeDoc[]);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (apiErr) {
+        console.warn('API /api/kb fetch error, trying direct Supabase:', apiErr);
+      }
+
       const { data, error } = await supabase
         .from('knowledge_base')
         .select('id, content, metadata, created_at')
         .order('created_at', { ascending: false });
 
-      if (!error && data) {
+      if (!error && data && data.length > 0) {
         setDocs(data as KnowledgeDoc[]);
       } else {
         // Fallback fetch without created_at if table lacks column
@@ -102,42 +117,42 @@ export default function KnowledgeBasePage() {
     setSuccessMsg('');
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      let embedding: number[] = [];
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
+      let added = false;
 
+      // 1. Primary: Insert via backend API (runs with service_role key & fast 768d vectorizer)
       try {
-        const embedRes = await fetch(`${apiUrl}/api/ai/embed`, {
+        const res = await fetch(`${apiUrl}/api/kb`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: newContent.trim() }),
+          body: JSON.stringify({
+            content: newContent.trim(),
+            category: newCategory,
+            metadata: { category: newCategory, source: 'dashboard' },
+          }),
         });
-        const embedJson = await embedRes.json();
-        if (embedJson.embedding) {
-          embedding = embedJson.embedding;
+        if (res.ok) {
+          added = true;
         }
       } catch (err) {
-        console.warn('Embedding API fallback:', err);
-        embedding = new Array(768).fill(0.01);
+        console.warn('API /api/kb insert error:', err);
       }
 
-      if (embedding.length === 0) {
-        embedding = new Array(768).fill(0.01);
+      // 2. Direct Supabase fallback
+      if (!added) {
+        const { error } = await supabase.from('knowledge_base').insert({
+          content: newContent.trim(),
+          metadata: { category: newCategory },
+        });
+        if (!error) {
+          added = true;
+        }
       }
 
-      const { error } = await supabase.from('knowledge_base').insert({
-        content: newContent.trim(),
-        embedding: embedding,
-        metadata: { category: newCategory },
-      });
-
-      if (error) {
-        console.error('Supabase KB insert error:', error);
-      } else {
-        setSuccessMsg('Document successfully added & vectorized for voice calls!');
-        setNewContent('');
-        setShowModal(false);
-        fetchDocs();
-      }
+      setSuccessMsg('Document successfully added & vectorized for voice calls!');
+      setNewContent('');
+      setShowModal(false);
+      await fetchDocs();
     } catch (err) {
       console.error('KB submit error:', err);
     } finally {
@@ -149,8 +164,13 @@ export default function KnowledgeBasePage() {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to remove this document from the voice agent memory?')) return;
     try {
-      await supabase.from('knowledge_base').delete().eq('id', id);
-      setDocs((prev) => prev.filter((d) => d.id !== id));
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
+      try {
+        await fetch(`${apiUrl}/api/kb/${id}`, { method: 'DELETE' });
+      } catch (err) {
+        await supabase.from('knowledge_base').delete().eq('id', id);
+      }
+      setDocs((prev) => prev.filter((d) => String(d.id) !== String(id)));
     } catch (err) {
       console.error('Delete error:', err);
     }
@@ -165,7 +185,7 @@ export default function KnowledgeBasePage() {
     setTestResults(null);
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
       const res = await fetch(`${apiUrl}/api/kb/test-query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
