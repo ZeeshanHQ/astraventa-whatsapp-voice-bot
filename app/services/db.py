@@ -15,10 +15,12 @@ def get_supabase_client() -> Optional[Client]:
     if supabase_client is not None:
         return supabase_client
 
-    supabase_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
-    if settings.SUPABASE_URL and supabase_key:
+    raw_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
+    supabase_key = raw_key.strip('"'') if raw_key else ""
+    supabase_url = settings.SUPABASE_URL.strip('"'') if settings.SUPABASE_URL else ""
+    if supabase_url and supabase_key:
         try:
-            supabase_client = create_client(settings.SUPABASE_URL, supabase_key)
+            supabase_client = create_client(supabase_url, supabase_key)
             logger.info(f"Supabase client initialized for: {settings.SUPABASE_URL}")
             return supabase_client
         except Exception as exc:
