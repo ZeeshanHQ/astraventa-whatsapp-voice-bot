@@ -53,26 +53,50 @@ class DeepgramLiveClient:
     async def _receive_loop(self):
         try:
             async for message in self.websocket:
-                data = json.loads(message)
-                channel = data.get("channel", {})
-                alternatives = channel.get("alternatives", [{}])
-                if not alternatives:
+                try:
+                    data = json.loads(message)
+                    if not isinstance(data, dict):
+                        continue
+
+                    # Filter out metadata or heartbeat messages
+                    msg_type = data.get("type")
+                    if msg_type in ("Metadata", "UtteranceEnd", "SpeechStarted"):
+                        continue
+
+                    channel = data.get("channel")
+                    if isinstance(channel, list) and len(channel) > 0:
+                        channel = channel[0]
+                    elif not isinstance(channel, dict):
+                        continue
+
+                    alternatives = channel.get("alternatives")
+                    if not alternatives or not isinstance(alternatives, list):
+                        continue
+
+                    first_alt = alternatives[0]
+                    if not isinstance(first_alt, dict):
+                        continue
+
+                    transcript = first_alt.get("transcript", "").strip()
+                    is_final = data.get("is_final", False)
+                    speech_final = data.get("speech_final", False)
+
+                    # Trigger callback when a speech segment is transcribed
+                    if transcript:
+                        final_flag = is_final or speech_final
+                        if asyncio.iscoroutinefunction(self.on_transcript):
+                            await self.on_transcript(transcript, final_flag)
+                        else:
+                            self.on_transcript(transcript, final_flag)
+
+                except Exception as inner_err:
+                    logger.debug(f"Deepgram message parse notice: {inner_err}")
                     continue
-                transcript = alternatives[0].get("transcript", "").strip()
-                is_final = data.get("is_final", False)
-                speech_final = data.get("speech_final", False)
-                
-                # Trigger callback when a speech segment is transcribed (either interim or final)
-                if transcript:
-                    final_flag = is_final or speech_final
-                    if asyncio.iscoroutinefunction(self.on_transcript):
-                        await self.on_transcript(transcript, final_flag)
-                    else:
-                        self.on_transcript(transcript, final_flag)
+
         except websockets.exceptions.ConnectionClosed:
-            logger.info("Deepgram WebSocket connection closed by server.")
+            logger.info("Deepgram WebSocket connection closed cleanly by server.")
         except Exception as e:
-            logger.error(f"Error in Deepgram receive loop: {e}", exc_info=True)
+            logger.error(f"Fatal error in Deepgram receive loop: {e}", exc_info=True)
         finally:
             self.is_active = False
 

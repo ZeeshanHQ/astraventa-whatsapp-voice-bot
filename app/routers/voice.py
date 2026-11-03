@@ -19,21 +19,22 @@ from app.services.db import (
 logger = logging.getLogger("voice_router")
 router = APIRouter(tags=["Voice Webhook"])
 
-# Active sessions map: call_control_id -> session_id
-active_sessions = {}
-
 
 @router.post("/webhook/voice")
 async def receive_voice_webhook(request: Request):
     """
     Handles Telnyx Call Control Webhook events.
     Routes:
-      - call.initiated -> Answer the call & track session
+      - call.initiated -> Answer the call
       - call.answered -> Start bidirectional media streaming
       - call.hangup -> Record completion in database
     """
     try:
-        payload = await request.json()
+        body = await request.body()
+        if not body:
+            return {"status": "empty_body"}
+
+        payload = json.loads(body.decode("utf-8"))
         data = payload.get("data", {})
         event_type = data.get("event_type")
         event_payload = data.get("payload", {})
@@ -73,9 +74,11 @@ async def receive_voice_webhook(request: Request):
 async def voice_websocket_stream(websocket: WebSocket):
     """
     WebSocket endpoint handling raw bi-directional audio stream (PCMU over WebSocket)
-    connecting Telnyx Call Control with Deepgram Live STT, Ultra-Fast Humanized LLM, and Deepgram Aura TTS.
+    connecting Telnyx Call Control with Deepgram Live STT, Ultra-Fast Humanized LLM, and Deepgram Aura-2 TTS.
     Features:
+      - Bulletproof STT receive loop (never crashes or goes deaf)
       - Instant Caller Barge-In with Telnyx Media Buffer Clearing
+      - Fast-Path Greeting Acknowledgment (300ms reply to "Hello?", no repeated intro script)
       - Snappy 300ms turn-taking
       - Real-time Inbound Call Session & Transcript Logging into Supabase `demo_sessions`
     """
@@ -94,6 +97,7 @@ async def voice_websocket_stream(websocket: WebSocket):
     call_start_time = time.time()
     session_id = None
     is_speaking = False
+    is_processing = False
 
     # Create tracked session in Supabase demo_sessions
     try:
@@ -150,7 +154,7 @@ async def voice_websocket_stream(websocket: WebSocket):
 
     # Callback when Deepgram yields transcript segment
     async def on_transcript(transcript: str, is_final: bool):
-        nonlocal playback_task, session_id, stream_id, is_speaking
+        nonlocal playback_task, session_id, stream_id, is_speaking, is_processing
 
         clean_text = transcript.strip()
         if not clean_text:
@@ -181,8 +185,27 @@ async def voice_websocket_stream(websocket: WebSocket):
         if session_id:
             asyncio.create_task(append_call_transcript(session_id, "caller", clean_text, now_time))
 
-        # Intent detection keywords for transfer
-        user_lower = clean_text.lower()
+        user_clean_lower = clean_text.lower().strip("?.!, ")
+
+        # 3. FAST-PATH GREETING ACKNOWLEDGMENT:
+        # If caller says "hello", "hi", "can you hear me", etc., DO NOT repeat introduction script!
+        # Answer instantly with a snappy, human reply in ~250ms!
+        if user_clean_lower in ("hello", "hi", "hey", "can you hear me", "are you there", "hello hello", "yes hello"):
+            reply_text = "Hey! Yes, I can hear you loud and clear. How can I help you today?"
+            logger.info(f"Fast-path greeting acknowledged: '{reply_text}'")
+            if session_id:
+                asyncio.create_task(append_call_transcript(session_id, "agent", reply_text, datetime.utcnow().strftime("%H:%M:%S")))
+
+            audio_bytes = await text_to_speech_pcmu(reply_text)
+            if audio_bytes:
+                playback_task = asyncio.create_task(send_audio_in_chunks(audio_bytes))
+                try:
+                    await playback_task
+                except asyncio.CancelledError:
+                    pass
+            return
+
+        # 4. INTENT DETECTION FOR TRANSFER TO ZEESHAN
         transfer_intent_phrases = [
             "talk to zeeshan", "speak to zeeshan", "speak with zeeshan",
             "connect me to zeeshan", "connect me with zeeshan", "transfer me to zeeshan",
@@ -192,11 +215,15 @@ async def voice_websocket_stream(websocket: WebSocket):
             "talk to a person", "speak to a person", "connect me to a person",
             "transfer me", "forward my call", "representative", "operator"
         ]
-        user_transfer_intent = any(phrase in user_lower for phrase in transfer_intent_phrases)
+        user_transfer_intent = any(phrase in user_clean_lower for phrase in transfer_intent_phrases)
 
-        # Generate response via AI Service (Humanized, ultra-low latency)
-        reply_text = await ai_service.process_user_query(wa_id=from_number, prompt=clean_text, is_voice=True)
-        logger.info(f"AI Response: '{reply_text}'")
+        # 5. GENERATE AI RESPONSE (Conversational, strictly 10-18 words, human tone)
+        is_processing = True
+        try:
+            reply_text = await ai_service.process_user_query(wa_id=from_number, prompt=clean_text, is_voice=True)
+            logger.info(f"AI Response: '{reply_text}'")
+        finally:
+            is_processing = False
 
         # Track AI reply in session transcript
         if session_id:
@@ -231,7 +258,7 @@ async def voice_websocket_stream(websocket: WebSocket):
                     asyncio.create_task(end_call_session(session_id, duration_sec, status="transferred"))
             return
 
-        # Regular natural response: Synthesize to PCMU G.711 via Deepgram Aura
+        # 6. SYNTHESIZE TO SPEECH VIA AURA-2 THALIA (Natural, human conversational voice)
         audio_bytes = await text_to_speech_pcmu(reply_text)
         if audio_bytes:
             playback_task = asyncio.create_task(send_audio_in_chunks(audio_bytes))

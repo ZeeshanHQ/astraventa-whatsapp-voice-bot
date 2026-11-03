@@ -15,6 +15,7 @@ import {
   Zap,
   RefreshCw,
   PhoneCall,
+  PhoneIncoming,
   Mic,
   ArrowRight,
 } from 'lucide-react';
@@ -41,6 +42,7 @@ export default function OverviewPage() {
     totalDocs: 6,
   });
   const [chartData, setChartData] = useState<any[]>(BASELINE_24H_DATA);
+  const [recentCalls, setRecentCalls] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchStats = async () => {
@@ -61,10 +63,10 @@ export default function OverviewPage() {
           .map((row) => row.wa_id)
       );
 
-      // Fetch knowledge base count via backend API
+      // Fetch knowledge base count and recent call sessions via backend API
       let docCount = 6;
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
         const kbRes = await fetch(`${apiUrl}/api/kb`);
         if (kbRes.ok) {
           const kbData = await kbRes.json();
@@ -77,6 +79,16 @@ export default function OverviewPage() {
           .from('knowledge_base')
           .select('id', { count: 'exact', head: true });
         if (kbCount) docCount = kbCount;
+      }
+
+      try {
+        const sessRes = await fetch(`${apiUrl}/api/kb/call-sessions`);
+        if (sessRes.ok) {
+          const sessData = await sessRes.json();
+          setRecentCalls((sessData.sessions || []).slice(0, 5));
+        }
+      } catch (e) {
+        console.warn('Call sessions overview fetch notice:', e);
       }
 
       setStats({
@@ -361,6 +373,65 @@ export default function OverviewPage() {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Live Recent Inbound Phone Calls Card */}
+      <div className="bg-[#0b101b] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-3 border-b border-zinc-800/60 pb-2">
+          <div className="flex items-center space-x-2">
+            <PhoneIncoming className="w-4 h-4 text-emerald-400" />
+            <h2 className="text-xs font-bold font-mono text-white uppercase tracking-wider">
+              Live Inbound Calls Telemetry (+1 925 504-0101)
+            </h2>
+          </div>
+          <Link
+            href="/admin/calls"
+            className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+          >
+            <span>View Full Call History</span>
+            <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+
+        {recentCalls.length === 0 ? (
+          <div className="py-6 text-center text-xs text-zinc-500 font-mono">
+            No live inbound calls recorded yet. Incoming calls to +1 (925) 504-0101 will display here.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs font-mono">
+              <thead>
+                <tr className="text-zinc-500 border-b border-zinc-800 text-[10px] uppercase">
+                  <th className="py-2 px-3">Caller Number</th>
+                  <th className="py-2 px-3">Call ID</th>
+                  <th className="py-2 px-3">Status</th>
+                  <th className="py-2 px-3">Duration</th>
+                  <th className="py-2 px-3 text-right">Time</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/40">
+                {recentCalls.map((call) => (
+                  <tr key={call.id} className="hover:bg-zinc-900/40 transition-colors">
+                    <td className="py-2.5 px-3 text-white font-semibold flex items-center space-x-2">
+                      <PhoneCall className="w-3 h-3 text-emerald-400" />
+                      <span>{call.destination_phone || 'Private / Browser'}</span>
+                    </td>
+                    <td className="py-2.5 px-3 text-cyan-400">{call.room_name}</td>
+                    <td className="py-2.5 px-3">
+                      <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        {call.status}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-zinc-300">{call.duration_seconds || 0}s</td>
+                    <td className="py-2.5 px-3 text-right text-zinc-500 text-[11px]">
+                      {call.created_at ? new Date(call.created_at).toLocaleTimeString() : 'Recent'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </motion.div>
   );

@@ -7,37 +7,44 @@ from app.config import settings
 logger = logging.getLogger("tts_service")
 
 # Professional Deepgram Aura voice (natural, conversational English female)
-DEFAULT_DEEPGRAM_VOICE = "aura-asteria-en"
+# Ultra-natural conversational Aura-2 voice (lifelike intonation, natural breathing, human tone)
+DEFAULT_DEEPGRAM_VOICE = "aura-2-thalia-en"
+FALLBACK_DEEPGRAM_VOICE = "aura-asteria-en"
 DEFAULT_EDGE_VOICE = "en-US-AriaNeural"
 
 async def text_to_speech_pcmu(text: str, voice: str = DEFAULT_DEEPGRAM_VOICE) -> bytes:
     """
     Synthesizes text to speech into raw G.711 PCMU (8kHz, mono mulaw) for Telnyx RTP audio streaming.
-    Primary: Deepgram Aura TTS (ultra-low latency ~150-250ms, direct PCMU output, official API).
-    Fallback: edge-tts piped through ffmpeg without deadlock.
+    Primary: Deepgram Aura-2 (Thalia - Ultra-natural human voice).
+    Fallback 1: Deepgram Aura-1 (Asteria).
+    Fallback 2: edge-tts piped through ffmpeg.
     """
     if not text or not text.strip():
         return b""
 
-    # 1. Primary: Deepgram Aura TTS
+    # Clean text of any accidental markdown or symbols before synthesis
+    clean_text = text.replace("*", "").replace("#", "").replace("`", "").strip()
+
+    # 1. Primary: Deepgram Aura-2 TTS
     if settings.DEEPGRAM_API_KEY:
-        try:
-            logger.info(f"Synthesizing text with Deepgram Aura TTS: '{text[:50]}...'")
-            url = f"https://api.deepgram.com/v1/speak?model={voice}&encoding=mulaw&sample_rate=8000&container=none"
-            headers = {
-                "Authorization": f"Token {settings.DEEPGRAM_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            payload = {"text": text}
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.post(url, headers=headers, json=payload)
-                if resp.status_code == 200 and resp.content:
-                    logger.info(f"Deepgram Aura TTS succeeded: {len(resp.content)} bytes PCMU generated.")
-                    return resp.content
-                else:
-                    logger.warning(f"Deepgram Aura TTS returned status {resp.status_code}")
-        except Exception as exc:
-            logger.warning(f"Deepgram Aura TTS failed: {exc}, attempting fallback...")
+        for candidate_voice in [voice, FALLBACK_DEEPGRAM_VOICE]:
+            try:
+                logger.info(f"Synthesizing text with Deepgram TTS ({candidate_voice}): '{clean_text[:50]}...'")
+                url = f"https://api.deepgram.com/v1/speak?model={candidate_voice}&encoding=mulaw&sample_rate=8000&container=none"
+                headers = {
+                    "Authorization": f"Token {settings.DEEPGRAM_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                payload = {"text": clean_text}
+                async with httpx.AsyncClient(timeout=6.0) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+                    if resp.status_code == 200 and resp.content:
+                        logger.info(f"Deepgram TTS ({candidate_voice}) succeeded: {len(resp.content)} bytes PCMU generated.")
+                        return resp.content
+                    else:
+                        logger.warning(f"Deepgram TTS ({candidate_voice}) returned status {resp.status_code}")
+            except Exception as exc:
+                logger.warning(f"Deepgram TTS ({candidate_voice}) failed: {exc}")
 
     # 2. Fallback: Edge TTS + ffmpeg (non-blocking buffer safe)
     try:
