@@ -3,7 +3,20 @@
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Phone, User, Bot, Radio, Send, RefreshCw, Terminal, Loader2, MessageSquare, ShieldCheck } from 'lucide-react';
+import {
+  Phone,
+  User,
+  Bot,
+  Radio,
+  Send,
+  RefreshCw,
+  Terminal,
+  Loader2,
+  ShieldCheck,
+  Calendar,
+  ArrowDown,
+  Clock,
+} from 'lucide-react';
 
 interface ChatLog {
   id: string;
@@ -13,14 +26,121 @@ interface ChatLog {
   created_at: string;
 }
 
+// ── Time & Date Helpers ──────────────────────────────────────────────────────
+
+function formatMessageTime(isoString?: string): string {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+  } catch {
+    return '';
+  }
+}
+
+function getMessageDateKey(isoString?: string): string {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    return d.toISOString().split('T')[0];
+  } catch {
+    return '';
+  }
+}
+
+function formatMessageDateSeparator(dateKey: string): string {
+  if (!dateKey) return '';
+  try {
+    const [y, m, d] = dateKey.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const isToday =
+      date.getDate() === today.getDate() &&
+      date.getMonth() === today.getMonth() &&
+      date.getFullYear() === today.getFullYear();
+
+    const isYesterday =
+      date.getDate() === yesterday.getDate() &&
+      date.getMonth() === yesterday.getMonth() &&
+      date.getFullYear() === yesterday.getFullYear();
+
+    if (isToday) {
+      return `Today — ${date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    }
+    if (isYesterday) {
+      return `Yesterday — ${date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    }
+    return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return dateKey;
+  }
+}
+
+function formatContactLastSeen(isoString?: string): string {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const isToday =
+      d.getDate() === now.getDate() &&
+      d.getMonth() === now.getMonth() &&
+      d.getFullYear() === now.getFullYear();
+
+    const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    if (isToday) {
+      return `Today, ${timeStr}`;
+    }
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday =
+      d.getDate() === yesterday.getDate() &&
+      d.getMonth() === yesterday.getMonth() &&
+      d.getFullYear() === yesterday.getFullYear();
+    if (isYesterday) {
+      return `Yesterday, ${timeStr}`;
+    }
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${timeStr}`;
+  } catch {
+    return '';
+  }
+}
+
 export default function RealtimeChatsPage() {
   const [messages, setMessages] = useState<ChatLog[]>([]);
   const [activeWaId, setActiveWaId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [testInput, setTestInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [directToWA, setDirectToWA] = useState(false); // Mode: AI Simulation vs Direct Outbound WhatsApp Handoff
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [directToWA, setDirectToWA] = useState(false);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+
+  // Smart scrolling handler: checks if user is reading previous messages
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const isBottom = scrollHeight - scrollTop - clientHeight < 100;
+    isAtBottomRef.current = isBottom;
+    setShowScrollBottomBtn(!isBottom);
+  };
+
+  const scrollToBottom = (smooth = true) => {
+    if (!scrollContainerRef.current) return;
+    scrollContainerRef.current.scrollTo({
+      top: scrollContainerRef.current.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto',
+    });
+    isAtBottomRef.current = true;
+    setShowScrollBottomBtn(false);
+  };
 
   const fetchLogs = async () => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
@@ -59,6 +179,7 @@ export default function RealtimeChatsPage() {
     setLoading(false);
   };
 
+  // Poll for live messages every 4 seconds
   useEffect(() => {
     fetchLogs();
     const interval = setInterval(fetchLogs, 4000);
@@ -75,7 +196,15 @@ export default function RealtimeChatsPage() {
         (payload) => {
           const newMsg = payload.new as ChatLog;
           setMessages((prev) => {
-            if (prev.some((m) => m.id === newMsg.id || (m.role === newMsg.role && m.content === newMsg.content && Math.abs(new Date(m.created_at).getTime() - new Date(newMsg.created_at).getTime()) < 3000))) {
+            if (
+              prev.some(
+                (m) =>
+                  m.id === newMsg.id ||
+                  (m.role === newMsg.role &&
+                    m.content === newMsg.content &&
+                    Math.abs(new Date(m.created_at).getTime() - new Date(newMsg.created_at).getTime()) < 3000)
+              )
+            ) {
               return prev;
             }
             return [...prev, newMsg];
@@ -96,9 +225,18 @@ export default function RealtimeChatsPage() {
     };
   }, [activeWaId]);
 
+  // SMART AUTO-SCROLL: ONLY scroll to bottom if user is already at the bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, activeWaId, sending]);
+    if (isAtBottomRef.current) {
+      scrollToBottom(false);
+    }
+  }, [messages]);
+
+  // Always jump to bottom when user explicitly selects a different contact
+  useEffect(() => {
+    isAtBottomRef.current = true;
+    scrollToBottom(false);
+  }, [activeWaId]);
 
   const contactsMap: { [key: string]: { lastMsg: string; time: string; count: number } } = {};
   messages.forEach((msg) => {
@@ -116,7 +254,8 @@ export default function RealtimeChatsPage() {
     .map((wa_id) => ({
       wa_id,
       ...contactsMap[wa_id],
-    }));
+    }))
+    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
 
   const activeThread = messages.filter((m) => m.wa_id === activeWaId);
 
@@ -128,7 +267,7 @@ export default function RealtimeChatsPage() {
     setTestInput('');
     setSending(true);
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
 
     if (directToWA) {
       // MODE: Human-in-the-Loop Direct WhatsApp Outbound Message
@@ -147,6 +286,8 @@ export default function RealtimeChatsPage() {
             created_at: new Date().toISOString(),
           };
           setMessages((prev) => [...prev, humanLog]);
+          isAtBottomRef.current = true;
+          setTimeout(() => scrollToBottom(true), 50);
         }
       } catch (err) {
         console.error('Error sending direct WhatsApp message:', err);
@@ -163,6 +304,8 @@ export default function RealtimeChatsPage() {
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, userLog]);
+      isAtBottomRef.current = true;
+      setTimeout(() => scrollToBottom(true), 50);
 
       try {
         const res = await fetch(`${apiUrl}/api/ai/chat`, {
@@ -172,7 +315,7 @@ export default function RealtimeChatsPage() {
         });
 
         const data = await res.json();
-        
+
         if (data.ai_reply) {
           const botLog: ChatLog = {
             id: `bot-${Date.now()}`,
@@ -182,6 +325,9 @@ export default function RealtimeChatsPage() {
             created_at: new Date().toISOString(),
           };
           setMessages((prev) => [...prev, botLog]);
+          if (isAtBottomRef.current) {
+            setTimeout(() => scrollToBottom(true), 50);
+          }
         }
       } catch (err) {
         console.error('Error sending AI chat message:', err);
@@ -190,6 +336,9 @@ export default function RealtimeChatsPage() {
       }
     }
   };
+
+  // Helper to track date boundary transitions
+  let lastDateKey = '';
 
   return (
     <motion.div
@@ -202,14 +351,14 @@ export default function RealtimeChatsPage() {
       <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
         <div>
           <h1 className="text-base font-bold text-white flex items-center gap-2 font-mono -tracking-tight">
-            REALTIME WHATSAPP STREAM
+            WHATSAPP LIVE STREAM
             <span className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-medium tracking-wide uppercase flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              WS Stream Active
+              Live Sync Active
             </span>
           </h1>
           <p className="text-[11px] text-zinc-400">
-            Realtime message logs and conversation threads
+            Realtime message logs, complete dialogue history & timestamps
           </p>
         </div>
 
@@ -227,7 +376,7 @@ export default function RealtimeChatsPage() {
         <div className="md:col-span-4 dev-card p-3 flex flex-col h-full overflow-hidden">
           <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80 mb-2 font-mono">
             <span className="text-[10px] uppercase font-semibold text-zinc-400 tracking-wider">
-              Active Contacts ({contactsList.length})
+              WhatsApp Contacts ({contactsList.length})
             </span>
             <Radio className="w-3 h-3 text-emerald-400 animate-pulse" strokeWidth={1.5} />
           </div>
@@ -246,7 +395,7 @@ export default function RealtimeChatsPage() {
                     onClick={() => setActiveWaId(contact.wa_id)}
                     className={`w-full text-left p-2.5 rounded-md transition-all border ${
                       isActive
-                        ? 'bg-zinc-900 border-emerald-500/40 text-white shadow-sm'
+                        ? 'bg-zinc-900 border-cyan-500/40 text-white shadow-sm'
                         : 'bg-zinc-950/40 border-zinc-800/60 hover:bg-zinc-900/60 text-zinc-300'
                     }`}
                   >
@@ -257,13 +406,24 @@ export default function RealtimeChatsPage() {
                           +{contact.wa_id}
                         </span>
                       </div>
-                      <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400">
+                      <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
                         {contact.count} msgs
                       </span>
                     </div>
-                    <p className="text-[11px] text-zinc-400 line-clamp-1 truncate font-sans">
+
+                    <p className="text-[11px] text-zinc-400 line-clamp-1 truncate font-sans mb-1">
                       {contact.lastMsg}
                     </p>
+
+                    <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500">
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-2.5 h-2.5 text-zinc-500" />
+                        Last active:
+                      </span>
+                      <span className="text-zinc-400">
+                        {formatContactLastSeen(contact.time)}
+                      </span>
+                    </div>
                   </button>
                 );
               })
@@ -272,19 +432,26 @@ export default function RealtimeChatsPage() {
         </div>
 
         {/* Conversation Stream Viewport */}
-        <div className="md:col-span-8 dev-card flex flex-col h-full overflow-hidden">
+        <div className="md:col-span-8 dev-card flex flex-col h-full overflow-hidden relative">
           {/* Header */}
           <div className="p-3 border-b border-zinc-800/80 bg-zinc-950/70 flex items-center justify-between font-mono">
             <div className="flex items-center space-x-2">
-              <div className="w-5 h-5 rounded bg-zinc-900 border border-zinc-700 flex items-center justify-center">
-                <User className="w-3 h-3 text-emerald-400" strokeWidth={1.5} />
+              <div className="w-6 h-6 rounded bg-zinc-900 border border-zinc-700 flex items-center justify-center">
+                <User className="w-3.5 h-3.5 text-cyan-400" strokeWidth={1.5} />
               </div>
-              <span className="text-xs font-bold text-white">
-                {activeWaId ? `+${activeWaId}` : 'Select contact'}
-              </span>
+              <div>
+                <span className="text-xs font-bold text-white block">
+                  {activeWaId ? `+${activeWaId}` : 'Select a contact'}
+                </span>
+                {activeWaId && (
+                  <span className="text-[10px] text-zinc-500 block">
+                    {activeThread.length} total messages in this conversation
+                  </span>
+                )}
+              </div>
             </div>
 
-            {/* Mode Switcher: AI Engine vs Direct Human Handoff */}
+            {/* Mode Switcher */}
             <div className="flex items-center space-x-2 text-[10px]">
               <button
                 type="button"
@@ -311,8 +478,12 @@ export default function RealtimeChatsPage() {
             </div>
           </div>
 
-          {/* Stream Feed */}
-          <div className="flex-1 p-3.5 overflow-y-auto space-y-3 font-sans">
+          {/* Stream Feed with onScroll handler */}
+          <div
+            ref={scrollContainerRef}
+            onScroll={handleScroll}
+            className="flex-1 p-3.5 overflow-y-auto space-y-3 font-sans"
+          >
             {activeThread.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-zinc-500 text-xs font-mono space-y-1">
                 <Terminal className="w-6 h-6 text-zinc-600 animate-pulse" strokeWidth={1.5} />
@@ -322,43 +493,68 @@ export default function RealtimeChatsPage() {
               <AnimatePresence>
                 {activeThread.map((msg) => {
                   const isUser = msg.role === 'user';
-                  return (
-                    <motion.div
-                      key={msg.id || `${msg.wa_id}-${msg.created_at}-${Math.random()}`}
-                      initial={{ opacity: 0, scale: 0.98, y: 4 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      transition={{ duration: 0.15 }}
-                      className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div className={`flex items-start max-w-[85%] space-x-2 ${isUser ? 'flex-row-reverse space-x-reverse' : 'flex-row'}`}>
-                        <div
-                          className={`w-6 h-6 rounded flex items-center justify-center flex-shrink-0 text-[10px] ${
-                            isUser
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-zinc-800 text-zinc-300 border border-zinc-700'
-                          }`}
-                        >
-                          {isUser ? <User className="w-3 h-3" strokeWidth={1.5} /> : <Bot className="w-3 h-3" strokeWidth={1.5} />}
-                        </div>
+                  const msgDateKey = getMessageDateKey(msg.created_at);
+                  const showSeparator = msgDateKey && msgDateKey !== lastDateKey;
+                  if (msgDateKey) {
+                    lastDateKey = msgDateKey;
+                  }
 
-                        <div
-                          className={`p-2.5 rounded-lg text-[12px] leading-normal ${
-                            isUser
-                              ? 'bg-zinc-900 border border-emerald-500/30 text-emerald-100'
-                              : 'bg-zinc-950 border border-zinc-800 text-zinc-200'
-                          }`}
-                        >
-                          <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
-                          <div
-                            className={`mt-1 text-[9px] font-mono ${
-                              isUser ? 'text-emerald-300/60 text-right' : 'text-zinc-500'
-                            }`}
-                          >
-                            {msg.created_at ? new Date(msg.created_at).toLocaleTimeString() : 'Just now'}
+                  return (
+                    <div key={msg.id || `${msg.wa_id}-${msg.created_at}-${Math.random()}`}>
+                      {/* Date Separator Pill */}
+                      {showSeparator && (
+                        <div className="flex items-center justify-center my-3">
+                          <div className="px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-[10px] font-mono font-medium text-zinc-400 shadow-sm flex items-center gap-1.5">
+                            <Calendar className="w-3 h-3 text-cyan-400" />
+                            <span>{formatMessageDateSeparator(msgDateKey)}</span>
                           </div>
                         </div>
-                      </div>
-                    </motion.div>
+                      )}
+
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.98, y: 4 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        transition={{ duration: 0.15 }}
+                        className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+                      >
+                        <div
+                          className={`flex items-start max-w-[85%] space-x-2 ${
+                            isUser ? 'flex-row-reverse space-x-reverse' : 'flex-row'
+                          }`}
+                        >
+                          <div
+                            className={`w-6 h-6 rounded flex items-center justify-center flex-shrink-0 text-[10px] ${
+                              isUser
+                                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
+                                : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                            }`}
+                          >
+                            {isUser ? <User className="w-3 h-3" strokeWidth={1.5} /> : <Bot className="w-3 h-3" strokeWidth={1.5} />}
+                          </div>
+
+                          <div
+                            className={`p-2.5 rounded-lg text-[12px] leading-normal shadow-sm ${
+                              isUser
+                                ? 'bg-zinc-900 border border-cyan-500/30 text-zinc-100'
+                                : 'bg-zinc-950 border border-zinc-800 text-zinc-200'
+                            }`}
+                          >
+                            <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+
+                            {/* Message Footer: Role & Exact Time */}
+                            <div className="flex items-center justify-between mt-1.5 pt-1 border-t border-zinc-800/40 text-[9px] font-mono gap-4">
+                              <span className={isUser ? 'text-cyan-400 font-semibold' : 'text-emerald-400 font-semibold'}>
+                                {isUser ? `User (+${msg.wa_id})` : 'Astraventa AI'}
+                              </span>
+                              <span className="text-zinc-400 flex items-center gap-1">
+                                <Clock className="w-2.5 h-2.5 text-zinc-500" />
+                                {formatMessageTime(msg.created_at) || 'Just now'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    </div>
                   );
                 })}
               </AnimatePresence>
@@ -380,9 +576,18 @@ export default function RealtimeChatsPage() {
                 </div>
               </motion.div>
             )}
-
-            <div ref={messagesEndRef} />
           </div>
+
+          {/* Floating Jump to Latest Button */}
+          {showScrollBottomBtn && (
+            <button
+              onClick={() => scrollToBottom(true)}
+              className="absolute bottom-16 right-6 px-3 py-1.5 rounded-full bg-cyan-500 text-black font-mono text-[11px] font-bold shadow-xl flex items-center gap-1.5 hover:bg-cyan-400 transition-all z-20 cursor-pointer"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+              <span>Jump to latest</span>
+            </button>
+          )}
 
           {/* Test / Human Handoff Input Form */}
           <form onSubmit={handleSendMessage} className="p-2.5 bg-zinc-950 border-t border-zinc-800 flex gap-2">
@@ -402,15 +607,15 @@ export default function RealtimeChatsPage() {
             />
             <button
               type="submit"
-              disabled={!activeWaId || sending || !testInput.trim()}
-              className={`px-3.5 py-1.5 rounded-md font-semibold text-xs disabled:opacity-50 transition-colors flex items-center gap-1 font-mono ${
+              disabled={!activeWaId || !testInput.trim() || sending}
+              className={`px-3 py-1.5 rounded-md text-xs font-mono font-medium flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 directToWA
-                  ? 'bg-cyan-500 hover:bg-cyan-400 text-black'
-                  : 'bg-emerald-500 hover:bg-emerald-400 text-black'
+                  ? 'bg-cyan-500 text-black hover:bg-cyan-400'
+                  : 'bg-emerald-500 text-black hover:bg-emerald-400'
               }`}
             >
-              <Send className="w-3 h-3" strokeWidth={1.5} />
-              <span>{sending ? 'Sending...' : directToWA ? 'Send WhatsApp' : 'Test'}</span>
+              {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              <span>{directToWA ? 'Send via WhatsApp' : 'Test AI'}</span>
             </button>
           </form>
         </div>
