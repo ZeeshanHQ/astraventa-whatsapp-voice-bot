@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     MAX_MEMORY_TURNS: int = 10
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
     TELNYX_API_KEY: str = ""
     DEEPGRAM_API_KEY: str = ""
     FORWARDING_TARGET: str = ""

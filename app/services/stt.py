@@ -16,10 +16,18 @@ class DeepgramLiveClient:
         self.api_key = settings.DEEPGRAM_API_KEY
         # encoding=mulaw, sample_rate=8000, channels=1 matching Telnyx RTP stream
         # interim_results=true allows word-by-word streaming for real-time barge-in
-        # endpointing=500 detects pauses in speech (500ms) to trigger speech_final, allowing user breathing room
+        # endpointing=650 detects natural pauses in speech (650ms) to prevent cutting caller off mid-thought
+        # utterance_end_ms=1200 marks turn boundaries cleanly
         # model=nova-2 provides state-of-the-art transcription accuracy for phone calls
         # smart_format=true formats numbers, capitalization, and names like Zeeshan correctly
-        self.url = "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000&channels=1&interim_results=true&endpointing=300&utterance_end_ms=1000&model=nova-2&smart_format=true"
+        # keywords boosts recognition of company terms
+        self.url = (
+            "wss://api.deepgram.com/v1/listen?"
+            "encoding=mulaw&sample_rate=8000&channels=1&"
+            "interim_results=true&endpointing=650&utterance_end_ms=1200&"
+            "model=nova-2&smart_format=true&"
+            "keywords=Astraventa:3&keywords=Zeeshan:3&keywords=services:2&keywords=pricing:2&keywords=voice:2&keywords=website:2"
+        )
         self.on_transcript = on_transcript_received
         self.websocket = None
         self.receive_task = None
@@ -32,7 +40,12 @@ class DeepgramLiveClient:
         try:
             logger.info(f"Connecting to Deepgram Live STT: {self.url}")
             headers = {"Authorization": f"Token {self.api_key}"}
-            self.websocket = await websockets.connect(self.url, additional_headers=headers)
+            self.websocket = await websockets.connect(
+                self.url,
+                additional_headers=headers,
+                ping_interval=10,
+                ping_timeout=10
+            )
             self.is_active = True
             self.receive_task = asyncio.create_task(self._receive_loop())
             logger.info("Successfully connected to Deepgram Live STT.")

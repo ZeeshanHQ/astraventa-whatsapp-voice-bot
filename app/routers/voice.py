@@ -98,6 +98,8 @@ async def voice_websocket_stream(websocket: WebSocket):
     session_id = None
     is_speaking = False
     is_processing = False
+    call_history = []
+    fast_greet_count = 0
 
     # Create tracked session in Supabase demo_sessions
     try:
@@ -188,10 +190,23 @@ async def voice_websocket_stream(websocket: WebSocket):
         user_clean_lower = clean_text.lower().strip("?.!, ")
 
         # 3. FAST-PATH GREETING ACKNOWLEDGMENT:
-        # If caller says "hello", "hi", "can you hear me", etc., DO NOT repeat introduction script!
-        # Answer instantly with a snappy, human reply in ~250ms!
-        if user_clean_lower in ("hello", "hi", "hey", "can you hear me", "are you there", "hello hello", "yes hello"):
-            reply_text = "Hey! Yes, I can hear you loud and clear. How can I help you today?"
+        # If caller says "hello", "hi", "can you hear me", "am i audible", etc., acknowledge dynamically!
+        # Answer instantly with a snappy, human reply in ~250ms without generic pitch recitation!
+        GREETING_PHRASES = (
+            "hello", "hi", "hey", "can you hear me", "are you there",
+            "hello hello", "yes hello", "am i audible", "i am audible",
+            "i'm audible", "hearing me", "you hear me", "is someone there"
+        )
+        if user_clean_lower in GREETING_PHRASES:
+            fast_greet_count += 1
+            if fast_greet_count == 1:
+                reply_text = "Hey! Yes, I can hear you loud and clear. How can I help you out today?"
+            else:
+                reply_text = "Yep, still right here with you! Hearing you loud and clear. Go ahead."
+
+            call_history.append({"role": "user", "content": clean_text})
+            call_history.append({"role": "assistant", "content": reply_text})
+
             logger.info(f"Fast-path greeting acknowledged: '{reply_text}'")
             if session_id:
                 asyncio.create_task(append_call_transcript(session_id, "agent", reply_text, datetime.utcnow().strftime("%H:%M:%S")))
@@ -217,13 +232,23 @@ async def voice_websocket_stream(websocket: WebSocket):
         ]
         user_transfer_intent = any(phrase in user_clean_lower for phrase in transfer_intent_phrases)
 
-        # 5. GENERATE AI RESPONSE (Conversational, strictly 10-18 words, human tone)
+        # 5. GENERATE AI RESPONSE (Conversational, direct, human tone, sub-800ms)
         is_processing = True
         try:
-            reply_text = await ai_service.process_user_query(wa_id=from_number, prompt=clean_text, is_voice=True)
+            reply_text = await ai_service.process_user_query(
+                wa_id=from_number,
+                prompt=clean_text,
+                is_voice=True,
+                call_history=call_history
+            )
             logger.info(f"AI Response: '{reply_text}'")
         finally:
             is_processing = False
+
+        call_history.append({"role": "user", "content": clean_text})
+        call_history.append({"role": "assistant", "content": reply_text})
+        if len(call_history) > 12:
+            call_history = call_history[-12:]
 
         # Track AI reply in session transcript
         if session_id:
@@ -298,6 +323,7 @@ async def voice_websocket_stream(websocket: WebSocket):
                 async def play_greeting():
                     nonlocal playback_task, session_id
                     greeting_text = "Hey there! Thanks for calling Astraventa. How can I help you out today?"
+                    call_history.append({"role": "assistant", "content": greeting_text})
                     if session_id:
                         asyncio.create_task(append_call_transcript(session_id, "agent", greeting_text, datetime.utcnow().strftime("%H:%M:%S")))
 

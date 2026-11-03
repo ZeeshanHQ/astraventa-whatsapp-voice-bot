@@ -6,17 +6,16 @@ from app.config import settings
 
 logger = logging.getLogger("tts_service")
 
-# Professional Deepgram Aura voice (natural, conversational English female)
-# Ultra-natural conversational Aura-2 voice (lifelike intonation, natural breathing, human tone)
-DEFAULT_DEEPGRAM_VOICE = "aura-2-thalia-en"
-FALLBACK_DEEPGRAM_VOICE = "aura-asteria-en"
+# Ultra-fast, highly natural conversational Deepgram Aura voices (~300ms latency on VPS)
+DEFAULT_DEEPGRAM_VOICE = "aura-luna-en"
+FALLBACK_DEEPGRAM_VOICE = "aura-athena-en"
 DEFAULT_EDGE_VOICE = "en-US-AriaNeural"
 
 async def text_to_speech_pcmu(text: str, voice: str = DEFAULT_DEEPGRAM_VOICE) -> bytes:
     """
     Synthesizes text to speech into raw G.711 PCMU (8kHz, mono mulaw) for Telnyx RTP audio streaming.
-    Primary: Deepgram Aura-2 (Thalia - Ultra-natural human voice).
-    Fallback 1: Deepgram Aura-1 (Asteria).
+    Primary: Deepgram Aura Luna (warm, ultra-low latency conversational female voice).
+    Fallback 1: Deepgram Aura Athena (crisp, fast conversational female voice).
     Fallback 2: edge-tts piped through ffmpeg.
     """
     if not text or not text.strip():
@@ -25,7 +24,7 @@ async def text_to_speech_pcmu(text: str, voice: str = DEFAULT_DEEPGRAM_VOICE) ->
     # Clean text of any accidental markdown or symbols before synthesis
     clean_text = text.replace("*", "").replace("#", "").replace("`", "").strip()
 
-    # 1. Primary: Deepgram Aura-2 TTS
+    # 1. Primary: Deepgram Aura TTS (low latency, ~300ms)
     if settings.DEEPGRAM_API_KEY:
         for candidate_voice in [voice, FALLBACK_DEEPGRAM_VOICE]:
             try:
@@ -36,7 +35,7 @@ async def text_to_speech_pcmu(text: str, voice: str = DEFAULT_DEEPGRAM_VOICE) ->
                     "Content-Type": "application/json"
                 }
                 payload = {"text": clean_text}
-                async with httpx.AsyncClient(timeout=6.0) as client:
+                async with httpx.AsyncClient(timeout=5.0) as client:
                     resp = await client.post(url, headers=headers, json=payload)
                     if resp.status_code == 200 and resp.content:
                         logger.info(f"Deepgram TTS ({candidate_voice}) succeeded: {len(resp.content)} bytes PCMU generated.")
