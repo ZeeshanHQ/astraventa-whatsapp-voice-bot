@@ -16,8 +16,8 @@ def get_supabase_client() -> Optional[Client]:
         return supabase_client
 
     raw_key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
-    supabase_key = raw_key.strip('"'') if raw_key else ""
-    supabase_url = settings.SUPABASE_URL.strip('"'') if settings.SUPABASE_URL else ""
+    supabase_key = raw_key.strip('"').strip("'") if raw_key else ""
+    supabase_url = settings.SUPABASE_URL.strip('"').strip("'") if settings.SUPABASE_URL else ""
     if supabase_url and supabase_key:
         try:
             supabase_client = create_client(supabase_url, supabase_key)
