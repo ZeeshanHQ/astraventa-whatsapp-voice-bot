@@ -23,7 +23,25 @@ export default function RealtimeChatsPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const fetchLogs = async () => {
-    setLoading(true);
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://api.engine.astraventa.com';
+    try {
+      const res = await fetch(`${apiUrl}/api/contacts/all-chats?limit=500`);
+      if (res.ok) {
+        const data = await res.json();
+        const logs = data.messages || [];
+        if (logs.length > 0) {
+          setMessages(logs);
+          if (!activeWaId) {
+            setActiveWaId(logs[logs.length - 1].wa_id);
+          }
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Backend all-chats fetch notice:', e);
+    }
+
     const { data, error } = await supabase
       .from('chat_logs')
       .select('*')
@@ -31,9 +49,9 @@ export default function RealtimeChatsPage() {
 
     if (error) {
       console.error('Error fetching chat logs:', error);
-    } else if (data) {
+    } else if (data && data.length > 0) {
       setMessages(data as ChatLog[]);
-      if (data.length > 0 && !activeWaId) {
+      if (!activeWaId) {
         const lastMsg = data[data.length - 1];
         setActiveWaId(lastMsg.wa_id);
       }
@@ -43,6 +61,7 @@ export default function RealtimeChatsPage() {
 
   useEffect(() => {
     fetchLogs();
+    const interval = setInterval(fetchLogs, 4000);
 
     const channel = supabase
       .channel('realtime-chat-stream')
@@ -72,9 +91,10 @@ export default function RealtimeChatsPage() {
       });
 
     return () => {
+      clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [activeWaId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

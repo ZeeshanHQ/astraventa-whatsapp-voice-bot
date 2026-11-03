@@ -9,6 +9,7 @@ from app.services.db import (
     set_contact_ai_status,
     fetch_chat_history,
     save_chat_message,
+    get_supabase_client,
 )
 from app.client.whatsapp import whatsapp_client
 
@@ -38,6 +39,64 @@ class NewConversationRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.get("/all-chats")
+async def get_all_chat_logs(limit: int = 500):
+    """
+    Returns recent chat logs across all contacts for realtime dashboard stream.
+    Queries Supabase using service_role to bypass RLS.
+    """
+    client = get_supabase_client()
+    if not client:
+        return {"messages": []}
+    try:
+        res = (
+            client.table("chat_logs")
+            .select("id, wa_id, role, content, created_at")
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return {"messages": res.data or []}
+    except Exception as exc:
+        logger.error(f"Error fetching all chat logs: {exc}")
+        return {"messages": []}
+
+
+@router.get("/stats")
+async def get_contacts_stats():
+    """
+    Returns message and conversation statistics for the dashboard overview.
+    """
+    client = get_supabase_client()
+    if not client:
+        return {"total_messages": 0, "total_conversations": 0, "active_users_today": 0}
+    try:
+        res = (
+            client.table("chat_logs")
+            .select("id, wa_id, created_at")
+            .order("created_at", desc=True)
+            .limit(2000)
+            .execute()
+        )
+        rows = res.data or []
+        total_msgs = len(rows)
+        unique_wa_ids = set(r["wa_id"] for r in rows if r.get("wa_id"))
+        total_convs = len(unique_wa_ids)
+
+        import datetime
+        today_prefix = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        active_today = len(set(r["wa_id"] for r in rows if r.get("created_at", "").startswith(today_prefix)))
+
+        return {
+            "total_messages": total_msgs,
+            "total_conversations": total_convs,
+            "active_users_today": active_today,
+        }
+    except Exception as exc:
+        logger.error(f"Error fetching contacts stats: {exc}")
+        return {"total_messages": 0, "total_conversations": 0, "active_users_today": 0}
+
 
 @router.get("")
 async def list_contacts():

@@ -43,6 +43,7 @@ export default function OverviewPage() {
   });
   const [chartData, setChartData] = useState<any[]>(BASELINE_24H_DATA);
   const [recentCalls, setRecentCalls] = useState<any[]>([]);
+  const [recentContacts, setRecentContacts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchStats = async () => {
@@ -430,6 +431,73 @@ export default function OverviewPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/* Live Recent WhatsApp Conversations Card */}
+      <div className="bg-[#0b101b] border border-zinc-800/80 rounded-xl p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-3 border-b border-zinc-800/60 pb-2">
+          <div className="flex items-center space-x-2">
+            <MessageSquare className="w-4 h-4 text-cyan-400" />
+            <h2 className="text-xs font-bold font-mono text-white uppercase tracking-wider">
+              Recent WhatsApp Conversations
+            </h2>
+          </div>
+          <Link
+            href="/admin/chats"
+            className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+          >
+            <span>Open WhatsApp Live Stream</span>
+            <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+
+        {recentContacts.length === 0 ? (
+          <div className="py-6 text-center text-xs text-zinc-500 font-mono">
+            No WhatsApp conversations recorded yet. Inbound WhatsApp messages will display here.
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-800/50">
+            {recentContacts.map((contact, idx) => (
+              <div key={contact.wa_id || idx} className="py-2.5 flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center font-mono text-xs text-cyan-400 font-bold">
+                    WA
+                  </div>
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-mono font-bold text-white">
+                        +{contact.wa_id}
+                      </span>
+                      {contact.contact_name && contact.contact_name !== contact.wa_id && (
+                        <span className="text-[10px] text-zinc-400 font-sans">
+                          ({contact.contact_name})
+                        </span>
+                      )}
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">
+                        Active
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 line-clamp-1 truncate max-w-md mt-0.5">
+                      {contact.last_message || 'Active WhatsApp conversation'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <span className="text-[10px] font-mono text-zinc-500 block">
+                    {contact.last_seen ? new Date(contact.last_seen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently'}
+                  </span>
+                  <Link
+                    href={`/admin/chats`}
+                    className="text-[10px] font-mono text-cyan-400 hover:underline inline-block mt-0.5"
+                  >
+                    View Chat &rarr;
+                  </Link>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>

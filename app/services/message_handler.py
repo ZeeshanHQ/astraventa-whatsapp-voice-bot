@@ -127,7 +127,20 @@ async def handle_single_message(message: Message) -> None:
                 "📅 *Book a Technical Walkthrough Consultation with Astraventa*\n\n"
                 "We would love to discuss your AI Automation requirements!\n\n"
                 "🔗 *Schedule 15-Min Call*: https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa\n"
-                "📞 *Direct Phone Line*: +1 925 504 0101"
+                "📞 *Direct Phone Line*: +1 925 504 0101\n"
+                "📱 *Direct Human WhatsApp*: +92 326 785 3405 (https://wa.me/923267853405)"
+            )
+            await whatsapp_client.send_text_message(to=wa_id, text=reply_text, reply_to_wamid=wamid)
+            return
+
+        elif btn_id == "btn_human":
+            reply_text = (
+                "👤 *Connect Directly with our Human Team*\n\n"
+                "You can reach our lead contact (*Zeeshan*) directly on WhatsApp or call:\n\n"
+                "📱 *Direct WhatsApp*: +92 326 785 3405\n"
+                "🔗 *Click to Chat*: https://wa.me/923267853405\n\n"
+                "📞 *US Direct Office Line*: +1 (925) 504-0101\n"
+                "📅 *Book Consultation (Calendly)*: https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa"
             )
             await whatsapp_client.send_text_message(to=wa_id, text=reply_text, reply_to_wamid=wamid)
             return
@@ -142,6 +155,32 @@ async def handle_single_message(message: Message) -> None:
     elif msg_type == "text" and message.text:
         user_text = message.text.body.strip()
         logger.info(f"Text message from {wa_id}: {user_text}")
+
+        # 1. Direct Human Support / Contact Number Intent Check
+        human_triggers = [
+            "talk to human", "speak to human", "speak with human", "talk with human",
+            "talk to a human", "speak to a human", "talk to a person", "speak to a person",
+            "human agent", "live agent", "real person", "representative", "operator",
+            "zeeshan", "talk to zeeshan", "speak to zeeshan", "connect with zeeshan",
+            "apka number", "apna number", "number do", "phone number", "whatsapp number",
+            "give me your number", "call me", "contact number", "direct number", "direct contact",
+            "human se bat", "kisi insan se", "insan se bat", "human support"
+        ]
+        u_lower = user_text.lower()
+        if any(h in u_lower for h in human_triggers):
+            reply_text = (
+                "👤 *Connect Directly with our Human Team*\n\n"
+                "You can reach our lead contact (*Zeeshan*) directly on WhatsApp or phone:\n\n"
+                "📱 *Direct WhatsApp*: +92 326 785 3405\n"
+                "🔗 *Click to Chat*: https://wa.me/923267853405\n\n"
+                "📞 *US Direct Office Line*: +1 (925) 504-0101\n"
+                "📅 *Book Consultation (Calendly)*: https://calendly.com/astraventaai/15-min-technical-walkthrough-astraventa\n\n"
+                "Feel free to message or call anytime!"
+            )
+            await whatsapp_client.send_text_message(to=wa_id, text=reply_text, reply_to_wamid=wamid)
+            await save_chat_message(wa_id=wa_id, role="user", content=user_text)
+            await save_chat_message(wa_id=wa_id, role="assistant", content=reply_text)
+            return
 
         # Detect intent
         intent = await ai_service.detect_intent(user_text)

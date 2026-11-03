@@ -146,7 +146,7 @@ export default function RootLayout({
                       >
                         <div className="flex items-center space-x-2.5">
                           <Inbox className="w-4 h-4 text-orange-400 group-hover:scale-110 transition-transform" />
-                          <span>Inbox & Takeover</span>
+                          <span>WhatsApp Inbox & Manual</span>
                         </div>
                       </Link>
 
@@ -157,7 +157,7 @@ export default function RootLayout({
                       >
                         <div className="flex items-center space-x-2.5">
                           <MessageSquareText className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
-                          <span>Realtime Log Stream</span>
+                          <span>WhatsApp Live Stream</span>
                         </div>
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 font-mono">
                           WS

@@ -71,7 +71,7 @@ async def fetch_chat_history(wa_id: str, limit: int = 10) -> List[Dict[str, str]
         rows = res.data or []
         rows.reverse()
 
-        return [{"role": r["role"], "content": r["content"]} for r in rows]
+        return [{"role": r["role"], "content": r["content"], "created_at": r.get("created_at", "")} for r in rows]
 
     except Exception as exc:
         logger.error(f"Error fetching chat history for {wa_id}: {exc}")
